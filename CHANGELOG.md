@@ -34,6 +34,141 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already attached to the old daemon keep using it while new sessions run
   standalone until it idles out — they never mix versions over the socket.
 
+- **Per-file staleness banner — codegraph responses now tell the agent which
+  files are pending re-index (#403).** When the file watcher has seen edits
+  since the last successful sync, MCP tool responses (`codegraph_search`,
+  `context`, `callers`, `callees`, `impact`, `trace`, `explore`, `node`,
+  `files`) prepend a `⚠️` banner naming the stale files referenced in that
+  response, with their edit age and indexing state; pending files elsewhere in
+  the project appear as a small footer. The agent is told which specific files
+  to Read directly; the rest of the response is fresh and codegraph stays
+  authoritative for it. No artificial wait, no static "wait ~500ms" guess —
+  the cost is zero when nothing's pending. `codegraph_status` also surfaces a
+  `### Pending sync:` section so an agent can ask "is the index caught up?" in
+  one call.
+- **`CODEGRAPH_WATCH_DEBOUNCE_MS` env var lets you tune the file-watcher quiet
+  window (#403).** Default stays at 2000ms; workspaces with bursty writes
+  (formatter-on-save chains, multi-file refactors, large generated outputs)
+  can raise it (e.g. `5000` or `10000`) without touching their agent's command
+  line. Clamped to `[100ms, 60s]`; out-of-range or non-numeric values fall
+  back to the default and the active value is logged to stderr on watcher
+  startup so it's discoverable. Pairs with the staleness banner above: the
+  banner stays accurate at any debounce value because it's per-file, not a
+  static "wait N ms" instruction.
+
+- **Objective-C indexing — `.m`, `.mm`, and content-sniffed `.h` files now
+  parse with full structural extraction (#165).** Adds a tree-sitter-objc
+  extractor that produces `class` nodes for `@interface` / `@implementation`
+  (deduplicated into one), `protocol` nodes for `@protocol`, methods with
+  **full multi-part selectors** (`setObject:forKey:`, `tableView:didSelectRowAtIndexPath:`
+  — not just the first keyword, which would collide distinct methods),
+  `+`/`-` static distinction, `@property` declarations, `#import` for both
+  `<system>` and `"local"` forms, and `extends` / `implements` edges for
+  superclasses and `<Protocol>` conformance lists. Call edges come from
+  both C-style `call_expression` and ObjC `message_expression` (with
+  `self`/`super` skipped on qualified callee names). Header files default
+  to C unless content-sniffing finds `@interface`/`@implementation`/
+  `@protocol`/`@synthesize`, so iOS headers classify correctly without
+  breaking pure-C projects. Validated on AFNetworking (84 files, 100% file
+  coverage, 93 multi-keyword selectors), RestKit (282 files, 99.6%), and
+  Texture (926 files, 100% — including heavy `.mm` ObjC++ content).
+
+  Disclosed limitations: categories produce one extra class node per
+  category file (e.g. `ASDisplayNode+Yoga.m` creates a second `ASDisplayNode`
+  node attributed to the category file); chained/nested message sends record
+  only the innermost method; `[Class alloc]` patterns don't yet emit
+  `instantiates` edges; `@protocol Foo <Bar>` refinement lists aren't wired
+  to `implements`; heavy C++ in `.mm` files may parse incompletely under the
+  ObjC grammar. Mixed Swift/Objective-C cross-language resolution
+  (`@objc`-exposed Swift methods, bridging headers, React Native's native
+  bridge) is **not** in scope for this entry — that's a separate effort
+  tracked under the dynamic-dispatch coverage playbook.
+
+- **Mixed iOS, React Native, and Expo cross-language bridging.** Real iOS
+  and React Native codebases live across multiple languages — a Swift caller
+  invokes an Objective-C selector that's been auto-bridged, JS calls into a
+  native module via the React Native bridge, JSX delegates to a native view
+  manager. Static tree-sitter extraction stops at each boundary. CodeGraph
+  now bridges them so `trace` / `callers` / `callees` / `impact` connect
+  end-to-end across the gap. Closes the iOS/RN parts of the request thread
+  for #401. Bridges added:
+
+  - **Swift ↔ Objective-C.** Swift `@objc` auto-bridging rules
+    (`func play(song:)` ↔ ObjC `-playWithSong:`, `init(name:, age:)` ↔
+    `-initWithName:age:`, `var x: T` ↔ `-x`/`-setX:`, `@objc(custom:)`
+    overrides) plus the Cocoa preposition-prefix forms that reverse-import
+    natively (`objectForKey:`, `stringWithFormat:`, etc.). Validated on
+    Charts (28 / 1 bridge edges objc→swift / swift→objc), realm-swift
+    (36 / 1185), wikipedia-ios (52 / 983). The high-confidence direction
+    is ObjC→Swift, since Swift callsites carry the bare method name only
+    and many overlap with Cocoa built-ins.
+
+  - **React Native legacy bridge + TurboModules.** Parses
+    `RCT_EXPORT_MODULE` / `RCT_EXPORT_METHOD` / `RCT_REMAP_METHOD` (ObjC
+    & ObjC++) and `@ReactMethod` (Java/Kotlin) declarations; treats
+    `Native<X>.ts` TurboModule spec files as ground truth. A JS callsite
+    of `NativeModules.X.fn(...)` or `import X from './NativeX'; X.fn(...)`
+    resolves to the matching native method. Validated on AsyncStorage
+    (8/8 precise), react-native-svg (9 TurboModule bridges to Java),
+    react-native-firebase (18 precise after `RCTEventEmitter` built-in
+    blocklist).
+
+  - **Native → JS event channel.** Synthesizes cross-language edges
+    keyed by literal event name: ObjC `sendEventWithName:@"X"` /
+    Swift `sendEvent(withName: "X", ...)` / Java/Kotlin `.emit("X", ...)`
+    → JS `new NativeEventEmitter(...).addListener("X", handler)`.
+    Falls back to attributing the JS endpoint to an enclosing
+    `constant`/`variable` for the very common
+    `const Foo = { watchX(listener) { ... addListener('X', listener) } }`
+    wrapper-API pattern. Validated on RNFirebase (3 push-notification
+    flow edges) and RNGeolocation (2 location-event edges).
+
+  - **Expo Modules.** Parses Swift/Kotlin Expo DSL —
+    `Module { Name("X"); Function("y") { ... }; AsyncFunction("z") { ... };
+    Property("w") { ... } }` — and synthesizes `method` nodes named after
+    each declaration. JS callsites of `requireNativeModule('X').y(...)`
+    then resolve via existing name-match. Validated on expo-haptics
+    (6 method nodes across Swift + Kotlin), expo-camera (41 covering the
+    full SDK surface), and a 7-package Expo sweep (134 method nodes).
+
+  - **Fabric / Codegen + legacy Paper view components.** Parses TS
+    `codegenNativeComponent<NativeProps>('Name', ...)` Codegen specs AND
+    legacy `RCT_EXPORT_VIEW_PROPERTY` / `@ReactProp` view-manager
+    macros. Emits a `component` node per declaration and a `property`
+    node per declared prop, then a synthesizer links the component to
+    its native impl class by convention-based name+suffix
+    (`View`/`ComponentView`/`Manager`/`ViewManager`). The existing JSX
+    synthesizer then connects consumer JSX `<MyView/>` → component →
+    native class. Validated on react-native-segmented-control
+    (legacy Paper — 1 component, 11 props, 4 bridges),
+    react-native-screens (Codegen Fabric — 27 components, 272 props,
+    68 bridges), and react-native-skia (hybrid, monorepo — 5 components,
+    14 props, 15 bridges across Codegen TS specs + Android Java
+    ViewManagers + iOS ObjC).
+
+  Each bridge emits `provenance:'heuristic'` edges with a stable
+  `metadata.synthesizedBy:` channel name (`swift-objc-bridge`,
+  `react-native-bridge`, `rn-event-channel`, `fabric-native-impl`,
+  `expo-modules`) so an agent can tell at a glance how a cross-language
+  hop got into the graph. Per-bridge precision blocklists prevent
+  noisy over-linking on generic Cocoa names (`init`, `description`,
+  `count`, …) and RN event-emitter built-ins (`addListener`, `remove`,
+  …) that every NSObject / RCTEventEmitter subclass exposes.
+
+  Architectural fix surfaced during validation: the resolver's
+  `initialize()` runs at CodeGraph construction (before any files are
+  indexed), so framework resolvers whose `detect()` consults the
+  indexed file list silently dropped themselves. `indexAll()` now
+  re-initializes the resolver after extraction so all frameworks see
+  the populated index — a pre-existing latent bug that also affected
+  the UIKit and SwiftUI resolvers.
+
+  Out of scope for this round: bare JSI (non-TurboModule), dynamic
+  bridge keys (`NativeModules[someVar]`), Android-Java extraction
+  improvements beyond name-match (we use whatever the existing Java
+  extractor produces). Anti-goals documented in
+  `docs/design/mixed-ios-and-react-native-bridging.md`.
+
 ### Fixed
 - **Git worktrees no longer silently borrow another tree's index (#155).**
   When a worktree is nested inside the main checkout — exactly what agent
