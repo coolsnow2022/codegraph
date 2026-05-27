@@ -205,6 +205,38 @@ export interface User {
     });
   });
 
+  it('should extract type references from interface property signatures', () => {
+    const code = `
+import type { IPage } from '../PromoterList';
+import type { IOrderField } from '../types';
+
+interface Hprops {
+  value?: Partial<IPage> & Partial<IOrderField>;
+}
+`;
+    const result = extractFromSource('HeaderFilter.ts', code);
+
+    const refs = result.unresolvedReferences.filter((r) => r.referenceKind === 'references');
+    expect(refs.some((r) => r.referenceName === 'IPage')).toBe(true);
+    expect(refs.some((r) => r.referenceName === 'IOrderField')).toBe(true);
+  });
+
+  it('should extract type references from interface method signatures', () => {
+    const code = `
+import type { IPage } from '../PromoterList';
+import type { IOrderField } from '../types';
+
+interface MethodForm {
+  fetchPage(arg: IPage): IOrderField;
+}
+`;
+    const result = extractFromSource('MethodForm.ts', code);
+
+    const refs = result.unresolvedReferences.filter((r) => r.referenceKind === 'references');
+    expect(refs.some((r) => r.referenceName === 'IPage')).toBe(true);
+    expect(refs.some((r) => r.referenceName === 'IOrderField')).toBe(true);
+  });
+
   it('should track function calls', () => {
     const code = `
 function main() {
@@ -485,6 +517,20 @@ export const authMachine = createMachine({
     const varNode = result.nodes.find((n) => n.kind === 'constant' && n.name === 'authMachine');
     expect(varNode).toBeDefined();
     expect(varNode?.isExported).toBe(true);
+  });
+
+  it('should extract calls from a top-level variable initializer (issue #425)', () => {
+    const code = `
+import { getTokenMp } from './api/upload';
+
+const token = getTokenMp();
+`;
+    const result = extractFromSource('app.ts', code);
+
+    const call = result.unresolvedReferences.find(
+      (ref) => ref.referenceKind === 'calls' && ref.referenceName === 'getTokenMp'
+    );
+    expect(call).toBeDefined();
   });
 });
 
@@ -2023,6 +2069,27 @@ end
       expect(names).toContain('iostream');
       expect(names).toContain('vector');
       expect(names).toContain('config.h');
+    });
+
+    it('should create unresolved references for local includes', () => {
+      const code = `#include "myheader.h"`;
+      const result = extractFromSource('main.cpp', code);
+
+      const importRef = result.unresolvedReferences.find(
+        (r) => r.referenceKind === 'imports' && r.referenceName === 'myheader.h'
+      );
+      expect(importRef).toBeDefined();
+      expect(importRef?.line).toBe(1);
+    });
+
+    it('should create unresolved references for system includes', () => {
+      const code = `#include <iostream>`;
+      const result = extractFromSource('main.cpp', code);
+
+      const importRef = result.unresolvedReferences.find(
+        (r) => r.referenceKind === 'imports' && r.referenceName === 'iostream'
+      );
+      expect(importRef).toBeDefined();
     });
   });
 
@@ -3566,6 +3633,53 @@ function increment(): void {
     for (const node of result.nodes) {
       expect(node.language).toBe('vue');
     }
+  });
+
+  it('should extract calls from top-level <script setup> initializers', () => {
+    const code = `<template>
+  <div>{{ token }}</div>
+</template>
+
+<script setup lang="ts">
+import { getTokenMp } from './api/upload';
+
+const token = getTokenMp();
+</script>
+`;
+    const result = extractFromSource('Issue425Setup.vue', code);
+
+    const call = result.unresolvedReferences.find(
+      (ref) => ref.referenceKind === 'calls' && ref.referenceName === 'getTokenMp'
+    );
+    expect(call).toBeDefined();
+  });
+
+  it('should extract calls from Vue Options API object methods', () => {
+    const code = `<template>
+  <button @click="save">Save</button>
+</template>
+
+<script>
+import { getTokenMp } from './api/upload';
+
+export default {
+  methods: {
+    save() {
+      return getTokenMp();
+    }
+  },
+  setup() {
+    return getTokenMp();
+  }
+}
+</script>
+`;
+    const result = extractFromSource('Issue425Options.vue', code);
+
+    const calls = result.unresolvedReferences.filter(
+      (ref) => ref.referenceKind === 'calls' && ref.referenceName === 'getTokenMp'
+    );
+    expect(calls).toHaveLength(2);
   });
 
   it('should extract from both <script> and <script setup> blocks', () => {
