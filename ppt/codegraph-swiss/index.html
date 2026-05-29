@@ -1291,8 +1291,10 @@
   .cg-slide-body{flex:1;min-height:0;display:flex;flex-direction:column}
   .cg-slide-foot{
     flex:0 0 auto;margin-top:auto;border-top:1px solid var(--border-subtle);
-    padding-top:1.5vh;display:flex;justify-content:space-between;align-items:end;gap:2vw
+    padding-top:1.5vh
   }
+  .cg-slide-foot .t-meta{max-width:100%;line-height:1.5}
+  .cg-slide-foot .kpi-thin-sm{display:none}
   .slide[data-layout="S17"] .cg-s17-split,
   .slide[data-layout="S21"] .cg-s21-split{
     display:grid;grid-template-columns:5fr 7fr;gap:4vw;
@@ -1314,8 +1316,9 @@
     display:grid;grid-template-columns:1fr 1fr;gap:2.8vw;flex:1;min-height:0;align-items:stretch
   }
   .slide.ua-skills .cg-ua-split .sub-grid-3-2{
-    margin-top:0;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(3,1fr);gap:1vh 1vw
+    margin-top:0;grid-template-columns:1fr;grid-template-rows:repeat(4,1fr);gap:1vh
   }
+  .slide.ua-skills .cg-ua-split{grid-template-columns:5fr 7fr}
   .slide.ua-skills .cg-ua-split .sub-card{padding:1.3vh .95vw}
   .slide.ua-skills .cg-ua-split .sub-card .ttl{font-size:max(16px,1vw)}
   .slide.ua-skills .cg-ua-visual{
@@ -1326,6 +1329,185 @@
   }
   .slide[data-layout="S17"] .cg-s17-cards .card-fill,
   .slide[data-layout="S17"] .cg-s17-cards .card-accent{min-height:0;padding:1.6vh 1.1vw}
+  .slide.cg-workflow-slide .canvas-card{
+    display:flex;flex-direction:column;min-height:0
+  }
+  .cg-workflow-split{
+    display:grid;grid-template-columns:5fr 7fr;gap:3vw;
+    flex:1;min-height:0;align-items:stretch
+  }
+  .cg-workflow-copy{
+    display:flex;flex-direction:column;gap:1.35vh;min-width:0;
+    justify-content:center;padding-right:.5vw
+  }
+  .cg-workflow-copy .h-workflow-zh{
+    font-family:var(--sans),var(--sans-zh);font-weight:200;
+    font-size:min(4.6vw,8vh);line-height:1.02;letter-spacing:-.025em
+  }
+  .cg-workflow-tagline{
+    font-family:var(--sans);font-size:max(14px,.88vw);line-height:1.5;
+    font-weight:400;color:var(--text-secondary);max-width:36ch
+  }
+  .cg-workflow-copy .mono{font-family:var(--mono);font-size:.9em;letter-spacing:.03em}
+  .cg-workflow-bullets{
+    list-style:none;display:flex;flex-direction:column;gap:.85vh;
+    font-family:var(--sans),var(--sans-zh);font-size:max(15px,.92vw);
+    line-height:1.45;color:var(--text-secondary);max-width:38ch;
+    margin-top:.4vh;padding-top:1.2vh;border-top:1px solid var(--border-subtle)
+  }
+  .cg-workflow-bullets li{padding-left:1.1em;position:relative}
+  .cg-workflow-bullets li::before{
+    content:"";position:absolute;left:0;top:.62em;width:.45em;height:1px;background:var(--accent)
+  }
+  .cg-workflow-split figure.tile{
+    display:flex;flex-direction:column;min-height:0;justify-content:center
+  }
+  .cg-workflow-split .img-zoom-hit{flex:1;min-height:0;display:flex;flex-direction:column}
+  .cg-workflow-split .frame-img.r-16x10{
+    flex:1;min-height:0;max-height:50vh;width:100%;aspect-ratio:16/10
+  }
+  .slide.cg-workflow-slide .cg-slide-foot{padding-top:1.2vh}
+  .cg-workflow-split .frame-img.fit-contain{background:var(--grey-1)}
+  .img-zoom-hit{
+    display:block;width:100%;margin:0;padding:0;border:0;background:transparent;
+    cursor:zoom-in;text-align:left;position:relative;font:inherit;color:inherit
+  }
+  .img-zoom-hit .frame-img{transition:outline-color .2s ease, box-shadow .2s ease}
+  .img-zoom-hit:hover .frame-img,
+  .img-zoom-hit:focus-visible .frame-img{
+    outline:2px solid var(--accent);outline-offset:2px;
+    box-shadow:0 8px 32px rgba(0,47,167,.12)
+  }
+  .img-zoom-hint{
+    position:absolute;right:10px;bottom:10px;z-index:2;pointer-events:none;
+    font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    background:rgba(250,250,248,.94);color:var(--text-helper);padding:5px 10px;
+    border:1px solid var(--border-subtle)
+  }
+  #img-lightbox{
+    position:fixed;inset:0;z-index:200;display:none;
+    align-items:center;justify-content:center;padding:3vh 3vw;
+    background:rgba(10,10,10,.9);backdrop-filter:blur(8px);cursor:zoom-out
+  }
+  #img-lightbox.open{display:flex}
+  #img-lightbox img{
+    max-width:min(96vw,1600px);max-height:92vh;width:auto;height:auto;
+    object-fit:contain;box-shadow:0 24px 80px rgba(0,0,0,.5);cursor:default
+  }
+  #img-lightbox .lb-close-hint{
+    position:absolute;bottom:2.2vh;left:50%;transform:translateX(-50%);
+    font-family:var(--mono);font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    color:rgba(255,255,255,.62);pointer-events:none
+  }
+
+  /* ============ 统一正文页骨架 cg-std ============ */
+  .slide.cg-std > .canvas-card{
+    display:flex;flex-direction:column;min-height:0;height:100%
+  }
+  .slide.cg-std .chrome-min.tight{margin-bottom:var(--sp-6);flex-shrink:0}
+  .cg-hd{
+    flex:0 0 auto;display:flex;flex-direction:column;gap:.7vh;
+    margin-bottom:2.2vh;max-height:20vh
+  }
+  .cg-hd__title{
+    font-family:var(--sans),var(--sans-zh);font-weight:200;
+    font-size:min(4.2vw,7.4vh);line-height:1.04;letter-spacing:-.025em;
+    max-width:18ch
+  }
+  .cg-hd__sub{
+    font-family:var(--sans),var(--sans-zh);font-size:max(16px,.98vw);
+    line-height:1.45;font-weight:400;color:var(--text-secondary);max-width:50ch
+  }
+  .cg-main{flex:1;min-height:0;display:flex;flex-direction:column}
+  .cg-ft{
+    flex-shrink:0;border-top:1px solid var(--border-subtle);
+    padding-top:1.3vh;margin-top:auto
+  }
+  .cg-grid-3{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:1.1vw;
+    flex:1;min-height:0;align-items:stretch
+  }
+  .cg-grid-4{
+    display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);
+    gap:1.1vw;flex:1;min-height:0
+  }
+  .cg-grid-4x1{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:1vw;
+    flex:1;min-height:0;align-items:stretch
+  }
+  .cg-cell{
+    background:var(--grey-1);padding:2vh 1.2vw;min-height:0;
+    display:flex;flex-direction:column;gap:.9vh;
+    border-top:2px solid var(--ink);justify-content:flex-start
+  }
+  .cg-cell.accent{background:var(--accent);color:var(--accent-on);border-top-color:var(--accent-on)}
+  .cg-cell__nb{font-family:var(--mono);font-size:13px;letter-spacing:.12em;opacity:.55}
+  .cg-cell__ttl{
+    font-family:var(--sans),var(--sans-zh);font-size:max(17px,1.05vw);
+    font-weight:500;line-height:1.25;letter-spacing:-.01em
+  }
+  .cg-cell__desc{
+    font-family:var(--sans),var(--sans-zh);font-size:max(16px,.92vw);
+    line-height:1.45;color:var(--text-secondary);margin-top:auto
+  }
+  .cg-cell.accent .cg-cell__desc{color:rgba(0,0,0,.72)}
+  .cg-cell .mono{font-family:var(--mono);font-size:.92em}
+  .cg-grid-3 .stat-card,.cg-grid-4 .stat-card,.cg-grid-4x1 .stat-card{min-height:0;height:100%}
+  .cg-proof{
+    display:grid;grid-template-columns:4fr 8fr;gap:2.4vw;
+    flex:1;min-height:0;align-items:stretch
+  }
+  .cg-proof__side{
+    display:flex;flex-direction:column;gap:1.8vh;justify-content:center;min-width:0
+  }
+  .cg-proof__metrics{display:grid;grid-template-columns:1fr 1fr;gap:1vw}
+  .cg-proof__metrics .stat-card{padding:1.8vh 1vw}
+  .cg-proof__metrics .stat-nb{font-size:min(3.2vw,5.6vh)!important}
+  .cg-proof figure.tile{display:flex;flex-direction:column;min-height:0;height:100%}
+  .cg-proof .frame-img.r-16x10{flex:1;min-height:0;max-height:none;height:100%;aspect-ratio:auto}
+  .slide.cg-proof-page .cg-ft{margin-top:1.2vh}
+  .cg-install{
+    display:grid;grid-template-columns:5fr 7fr;gap:2.4vw;
+    flex:1;min-height:0;align-items:stretch
+  }
+  .cg-install__steps{display:flex;flex-direction:column;gap:1vh;justify-content:center}
+  .cg-install__steps .cg-cell{flex:1}
+  .cg-install .cg-code{font-size:max(14px,.78vw);align-self:stretch;display:flex;align-items:center}
+  .cg-duo-flat{
+    display:grid;grid-template-columns:1fr 1px 1fr;gap:0 2.4vw;
+    flex:1;min-height:0;align-items:stretch;margin-top:0
+  }
+  .cg-duo-flat .vrule{align-self:stretch;background:var(--border-subtle);width:1px}
+  .cg-duo-flat .col{
+    display:flex;flex-direction:column;gap:1.2vh;padding:2vh 0;min-height:0
+  }
+  .cg-duo-flat .col-tag{
+    font-family:var(--mono);font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--text-helper)
+  }
+  .cg-duo-flat .col-ttl{
+    font-family:var(--sans),var(--sans-zh);font-weight:300;
+    font-size:min(2.6vw,4.4vh);line-height:1.1;letter-spacing:-.02em
+  }
+  .cg-duo-flat .col.accent .col-ttl{color:var(--accent)}
+  .cg-duo-flat ul{
+    list-style:none;display:flex;flex-direction:column;gap:.75vh;
+    font-size:max(16px,.94vw);line-height:1.45;color:var(--text-secondary);margin-top:auto
+  }
+  .cg-duo-flat li{padding-left:1em;position:relative}
+  .cg-duo-flat li::before{
+    content:"";position:absolute;left:0;top:.58em;width:.4em;height:1px;background:var(--accent)
+  }
+  .cg-ua-row{
+    display:grid;grid-template-columns:7fr 5fr;gap:2.4vw;
+    flex:1;min-height:0;align-items:stretch
+  }
+  .cg-ua-row .cg-grid-4{gap:.9vh .9vw}
+  .cg-ua-row .cg-cell{padding:1.5vh 1vw}
+  .cg-ua-row .cg-cell__ttl{font-size:max(16px,1vw)}
+  .cg-ua-row .cg-cell__desc{font-size:max(15px,.88vw)}
+  .cg-ua-row figure.tile{display:flex;flex-direction:column;min-height:0}
+  .cg-ua-row .frame-img.r-16x10{flex:1;min-height:0;aspect-ratio:16/10}
 </style>
 </head>
 <body class="canvas-mode">
@@ -1362,6 +1544,11 @@
 <canvas id="bg-grid" class="bg"></canvas>
 <div id="hint">← → 翻页 · B 静态 · ESC 索引</div>
 
+<div id="img-lightbox" role="dialog" aria-modal="true" aria-label="图片全屏预览" hidden>
+  <img src="" alt="">
+  <div class="lb-close-hint">ESC 或点击空白处关闭</div>
+</div>
+
 <div id="deck">
 
 <!-- ============================================================
@@ -1392,328 +1579,224 @@
   <div class="canvas-card">
     <canvas class="ascii-bg" aria-hidden="true"></canvas>
     <div class="chrome-min">
-      <div class="l">CodeGraph + Understand Anything</div>
-      <div class="r">Swiss · Lemon Green · 01 / 12</div>
+      <div class="l">CodeGraph · Technical Share</div>
+      <div class="r">Swiss · 01 / 12</div>
     </div>
-
-    <!-- 主体:padding 必须为 0,不要再叠 5vw,否则左右对不齐 chrome-min -->
-    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr auto;gap:2.6vh">
-      <div data-anim="kicker" class="t-meta" style="color:rgba(0,0,0,.68);letter-spacing:.22em">CODE INTELLIGENCE · AGENT + HUMAN</div>
-
-      <h1 data-anim="title" style="align-self:center;font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(9.4vw,16.4vh);line-height:.96;letter-spacing:-.025em;color:var(--accent-on)">CodeGraph<br/>+ Understand<br/><span style="font-style:italic;font-weight:300">Anything</span></h1>
-
-      <div data-anim="bottom" style="display:grid;grid-template-rows:auto auto;gap:1.6vh;border-top:1px solid rgba(255,255,255,.22);padding-top:2vh">
-        <div data-anim="lead" class="lead" style="max-width:58ch;color:rgba(0,0,0,.82);font-weight:400">Agent 用 CodeGraph 查结构；团队用 Understand Anything 建图、看 Dashboard、走 Guided Tour——同一代码库，两条理解路径。</div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr auto;gap:2.4vh">
+      <div data-anim="kicker" class="t-meta" style="color:rgba(0,0,0,.68);letter-spacing:.22em">LOCAL-FIRST · MCP · 100% ON YOUR MACHINE</div>
+      <h1 data-anim="title" style="align-self:center;font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(8.4vw,14.6vh);line-height:.96;letter-spacing:-.025em;color:var(--accent-on)">CodeGraph<br/><span style="font-style:italic;font-weight:300">技术分享</span></h1>
+      <div data-anim="bottom" style="display:grid;grid-template-rows:auto auto;gap:1.4vh;border-top:1px solid rgba(255,255,255,.22);padding-top:2vh">
+        <div data-anim="lead" class="lead" style="max-width:48ch;color:rgba(0,0,0,.82);font-weight:400">本地预索引代码知识图谱 · MCP 给 Agent 查结构 · 配合 Understand Anything 给人看全景</div>
         <div style="display:flex;justify-content:space-between;align-items:end">
-          <div class="t-meta" style="color:rgba(0,0,0,.58)">12 chapters · concise engineering share</div>
-          <div class="t-meta" style="color:rgba(0,0,0,.58)">→ swipe / arrow keys</div>
+          <div class="t-meta" style="color:rgba(0,0,0,.58)">@colbymchenry/codegraph · MIT</div>
+          <div class="t-meta" style="color:rgba(0,0,0,.58)">→ swipe / ESC 索引</div>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<section class="slide" data-layout="S08" data-animate="duo-mirror">
+<section class="slide cg-std" data-layout="S21" data-animate="tech-spec">
   <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">02 · WORKFLOW CONTRAST</div><div class="r">WHY IT MATTERS</div></div>
-    <div data-anim="head" class="cg-duo-head cg-slide-head">
-      <div class="t-meta">同一个问题：改 mutateElement 会影响什么？</div>
-      <h2 class="h-xl-zh">从盲搜循环，到结构查询</h2>
+    <div class="chrome-min tight"><div class="l">02 · PROBLEM</div><div class="r">02 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">盲搜很贵</h2>
+      <p class="cg-hd__sub">Agent 还没改代码，就在 grep + Read 里烧掉 token 和工具配额。</p>
+    </header>
+    <div class="cg-main cg-grid-3" data-anim="kpi">
+      <div class="stat-card accent-top"><div class="stat-label">Tools / question</div><div class="stat-nb">21<span class="stat-unit">+</span></div><div class="stat-note">无图 · 单次架构问题</div></div>
+      <div class="stat-card accent-top"><div class="stat-label">Read</div><div class="stat-nb">9</div><div class="stat-note">Excalidraw · 无 CodeGraph</div></div>
+      <div class="stat-card accent-top"><div class="stat-label">Dynamic flow</div><div class="stat-nb">0</div><div class="stat-note">React / 路由 · grep 跟不到</div></div>
     </div>
-    <div class="duo-compare cg-duo-dense">
-      <div class="col">
-        <div class="col-tag"><span class="num">X</span> Without CodeGraph</div>
-        <div class="col-ttl" style="color:#b63a32">Grep + Read<br/>循环</div>
-        <div class="cg-flow-stack">
-          <div class="cg-flow-step bad"><span class="mono">grep</span> "mutateElement"</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step bad"><span class="mono">read</span> scene.ts · 415 KB</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step bad"><span class="mono">grep</span> 调用方 / setState / JSX</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step bad"><span class="mono">guess</span> 动态派发跟丢</div>
+    <footer class="cg-ft"><span class="t-meta">对策：本地预索引 → Agent 改问图，而不是扫仓库</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std cg-proof-page" data-layout="S16" data-animate="tech-spec">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">03 · PROOF</div><div class="r">03 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">结构查询替代盲搜</h2>
+      <p class="cg-hd__sub">案例：Excalidraw 改 <span class="mono">mutateElement</span> 如何渲染到画布 · median of 4</p>
+    </header>
+    <div class="cg-main cg-proof" data-anim="up">
+      <div class="cg-proof__side">
+        <div class="cg-proof__metrics">
+          <div class="stat-card"><div class="stat-label">Without</div><div class="stat-nb">130<span class="stat-unit">s</span></div><div class="stat-note">21 tools · 9 Read</div></div>
+          <div class="stat-card accent-top"><div class="stat-label">With CG</div><div class="stat-nb">60<span class="stat-unit">s</span></div><div class="stat-note">3 tools · 0 Read</div></div>
         </div>
-        <div class="cg-metric-row" style="color:#b63a32">
-          <div><div class="cg-metric">130<small>秒</small></div><div class="t-meta">duration</div></div>
-          <div><div class="cg-metric">9<small>Read</small></div><div class="t-meta">file reads</div></div>
-        </div>
+        <p class="t-body" style="font-size:max(16px,.94vw);color:var(--text-secondary);max-width:32ch"><span class="mono">context</span> → <span class="mono">trace</span> 一次拿全链与内联源码。</p>
       </div>
-      <div class="vrule"></div>
-      <div class="col accent">
-        <div class="col-tag"><span class="num">✓</span> With CodeGraph</div>
-        <div class="col-ttl">预建 AST<br/>知识图谱</div>
-        <div class="cg-flow-stack">
-          <div class="cg-flow-step good"><span class="mono">context</span> 定位 rerender flow</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">trace</span> mutateElement → render</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">inline</span> 调用链 + 源码片段</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">answer</span> 无需 Read / Grep</div>
-        </div>
-        <div class="cg-duo-foot">
-          <div class="cg-graph-card cg-graph-mini">
-            <div class="t-meta" style="color:#275022">预建知识图 + 合成边</div>
-            <div class="cg-graph-line"><span class="cg-node"></span><span class="cg-edge"></span><span class="cg-node"></span><span class="cg-edge dash"></span><span class="cg-node"></span><span class="cg-edge"></span><span class="cg-node"></span></div>
+      <figure class="tile">
+        <button type="button" class="img-zoom-hit" data-zoom-src="images/02-workflow-comparison.png" aria-label="全屏查看工作流对比">
+          <div class="frame-img r-16x10 fit-contain">
+            <img src="images/02-workflow-comparison.png" alt="Agent 工作流对比" data-image-slot="s16-brief-16x10" loading="eager" decoding="async">
           </div>
-          <div class="cg-metric-row" style="color:#176b3c">
-            <div><div class="cg-metric">60<small>秒</small></div><div class="t-meta">-54%</div></div>
-            <div><div class="cg-metric">0<small>Read</small></div><div class="t-meta">-100%</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">Excalidraw · 架构问题 · median of 4 runs · v0.9.4</div>
-      <div class="kpi-thin-sm accent">trace 一次闭合整条链</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S09" data-animate="matrix-statement">
-  <div class="canvas-card">
-    <span class="dot-mat xl" style="position:absolute;right:4vw;top:6vh;width:32vw;height:32vw;color:var(--accent);opacity:.55"></span>
-    <span class="ring-mat lg" style="position:absolute;left:5vw;bottom:10vh;width:16vw;height:16vw;color:var(--ink);opacity:.22"></span>
-    <div class="chrome-min tight"><div class="l">03 · WHAT IT IS</div><div class="r">CODEGRAPH</div></div>
-    <div data-anim="statement" class="cg-s09-statement">
-      <h2>本地代码<br/>知识图谱</h2>
-      <div class="cg-s09-aside">
-        <div class="lead" style="font-size:max(20px,1.5vw);font-weight:400">确定性 AST 索引 + MCP 查询面。不是让 LLM 总结代码，而是把符号、边、调用链存进可检索的图。</div>
-        <div class="cg-code">npm i -g @colbymchenry/codegraph
-codegraph init -i    # .codegraph/ 本地索引
-
-Tree-sitter · 40+ 语言
-SQLite + FTS5 · 10 个 MCP 工具
-Claude · Cursor · Codex · opencode …</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S04" data-animate="six-cells">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">04 · CORE QUESTIONS</div><div class="r">QUESTION → TOOL</div></div>
-    <div data-anim="head" class="cg-slide-head">
-      <div class="t-meta">每个问题对应明确的 MCP 工具，而不是「先 grep 再说」</div>
-      <h2 class="h-xl-zh">六类结构问题</h2>
-    </div>
-    <div class="cg-slide-body">
-    <div class="sub-grid-3-2">
-      <div class="sub-card"><i data-lucide="search"></i><span class="nb-corner">01</span><div class="ttl">入口在哪里</div><div class="desc"><span class="mono">search</span> · <span class="mono">files</span> — 按符号名、路由、组件、目录找定义与入口。</div></div>
-      <div class="sub-card accent"><i data-lucide="route"></i><span class="nb-corner">02</span><div class="ttl">路径怎么走</div><div class="desc"><span class="mono">trace</span> — A→B 整链一次返回，含 React render、JSX、callback 合成边。</div></div>
-      <div class="sub-card"><i data-lucide="radar"></i><span class="nb-corner">03</span><div class="ttl">影响有多大</div><div class="desc"><span class="mono">callers</span> · <span class="mono">callees</span> · <span class="mono">impact</span> — 改 symbol 前的爆炸半径。</div></div>
-      <div class="sub-card"><i data-lucide="git-branch"></i><span class="nb-corner">04</span><div class="ttl">任务从哪入手</div><div class="desc"><span class="mono">context</span> — 一句任务描述，返回入口点、相关 symbol 与调用关系。</div></div>
-      <div class="sub-card"><i data-lucide="file-code-2"></i><span class="nb-corner">05</span><div class="ttl">源码如何裁剪</div><div class="desc"><span class="mono">explore</span> · <span class="mono">node</span> — 多符号源码一次拉回，带签名与 trail。</div></div>
-      <div class="sub-card"><i data-lucide="refresh-cw"></i><span class="nb-corner">06</span><div class="ttl">索引是否新鲜</div><div class="desc"><span class="mono">status</span> — watcher debounce、staleness banner、pending sync 列表。</div></div>
-    </div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S11" data-animate="timeline-walk">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">05 · ARCHITECTURE</div><div class="r">PIPELINE</div></div>
-    <div data-anim="head" class="cg-slide-head">
-      <div class="t-meta">从工作区文件到 MCP 回答</div>
-      <h2 class="h-xl-zh">六段式流水线</h2>
-    </div>
-    <div class="cg-slide-body">
-    <div class="cg-pipeline cg-pipeline-compact">
-      <div class="cg-pipe"><div class="num">01</div><div class="ttl">Files</div><div class="sub">gitignore · 生成物检测 · 增量 index / sync。</div></div>
-      <div class="cg-pipe"><div class="num">02</div><div class="ttl">Tree-sitter</div><div class="sub">WASM 语法库 + parse-worker；Vue / Svelte / Liquid 等专用提取器。</div></div>
-      <div class="cg-pipe"><div class="num">03</div><div class="ttl">Extract</div><div class="sub">nodes / edges 写入 SQLite；FTS5 全文检索。</div></div>
-      <div class="cg-pipe accent"><div class="num">04</div><div class="ttl">Resolve</div><div class="sub">import · tsconfig paths · framework routes · 合成边。</div></div>
-      <div class="cg-pipe"><div class="num">05</div><div class="ttl">Traverse</div><div class="sub">GraphTraverser：callers、callees、impact、path finding。</div></div>
-      <div class="cg-pipe"><div class="num">06</div><div class="ttl">MCP</div><div class="sub">ContextBuilder 格式化输出；serve --mcp 给 Agent。</div></div>
-    </div>
-    </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">ExtractionOrchestrator → ReferenceResolver → GraphQueryManager</div>
-      <div class="kpi-thin-sm accent">library · CLI · MCP 同一套引擎</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S15" data-animate="matrix-fill">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">06 · INDEX LAYER</div><div class="r">AST → GRAPH</div></div>
-    <div data-anim="head" class="cg-slide-head">
-      <div class="t-meta">同一输入 → 同一图；可 diff、可版本管理</div>
-      <h2 class="h-xl-zh">代码被拆成节点与边</h2>
-    </div>
-    <div class="cg-slide-body">
-    <div class="cg-edge-list">
-      <div class="cg-edge-item"><div class="kind">NodeKind</div><div class="text">file · module · class · interface · function · method · property</div></div>
-      <div class="cg-edge-item"><div class="kind">NodeKind</div><div class="text">route · component · enum · type_alias · namespace · parameter</div></div>
-      <div class="cg-edge-item"><div class="kind">EdgeKind</div><div class="text">contains · calls · imports · exports · references · type_of</div></div>
-      <div class="cg-edge-item"><div class="kind">EdgeKind</div><div class="text">extends · implements · instantiates · overrides · decorates</div></div>
-      <div class="cg-edge-item"><div class="kind">Languages</div><div class="text">40+ tree-sitter 语法；Delphi DFM、Cargo workspace、monorepo 路径别名。</div></div>
-      <div class="cg-edge-item"><div class="kind">Storage</div><div class="text">.codegraph/ · better-sqlite3（wasm 回退）· FTS5 · prepared statements。</div></div>
-    </div>
-    </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">heuristic 边带 provenance · synthesizedBy 元数据</div>
-      <div class="kpi-thin-sm accent">确定性 · 可复现</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S17" data-animate="system-diagram">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">07 · RELATION LAYER</div><div class="r">CONNECT THE GAPS</div></div>
-    <div class="cg-s17-split">
-      <div data-anim="left" style="display:flex;flex-direction:column;gap:1.8vh">
-        <div class="t-meta">难点不是找到符号，而是连成路径</div>
-        <h2 class="h-xl-zh" style="font-size:min(4.8vw,8.2vh)">关系层补全<br/>可追踪调用图</h2>
-        <p class="lead" style="font-size:max(18px,1.2vw);max-width:36ch">ReferenceResolver：import、tsconfig path alias、name matching。Framework resolver 连路由到 handler；synthesizer 桥接动态派发。</p>
-      </div>
-      <div data-anim="right" class="cg-s17-cards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:1vw;align-items:stretch">
-        <div class="card-fill"><div class="t-meta">01</div><h3 class="t-h-prod">Import</h3><p class="t-body-sm">模块路径、workspace member、path alias → imports 边。</p></div>
-        <div class="card-fill"><div class="t-meta">02</div><h3 class="t-h-prod">Frameworks</h3><p class="t-body-sm">Express · Django · Rails · FastAPI · Spring · Gin · NestJS · React Router …</p></div>
-        <div class="card-accent"><div class="t-meta">03</div><h3 class="t-h-prod" style="color:var(--accent-on)">Synthesize</h3><p class="t-body-sm" style="color:rgba(0,0,0,.74)">callback · setState→render · JSX child · Django descriptor · Swift↔ObjC。</p></div>
-        <div class="card-fill"><div class="t-meta">04</div><h3 class="t-h-prod">Match</h3><p class="t-body-sm">跨文件 calls 候选收敛；歧义时 trace 仍给多条路径。</p></div>
-        <div class="card-fill"><div class="t-meta">05</div><h3 class="t-h-prod">trace</h3><p class="t-body-sm">端到端路径 + 每跳 inline 源码 + 合成边 wiring site。</p></div>
-        <div class="card-fill"><div class="t-meta">06</div><h3 class="t-h-prod">impact</h3><p class="t-body-sm">BFS 影响半径；重构 / review 前看破坏面。</p></div>
-      </div>
-    </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">原则：半条链不如不桥 — 动态流必须端到端闭合</div>
-      <div class="kpi-thin-sm accent">grep 跟不到的，图要能跟到</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S16" data-animate="field-notes">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">08 · MCP TOOLS</div><div class="r">QUERY SURFACE</div></div>
-    <div data-anim="head" class="cg-slide-head">
-      <div class="t-meta">initialize 里带用法说明；Agent 按意图选工具，不要 grep 重建路径</div>
-      <h2 class="h-xl-zh">十个 MCP 工具</h2>
-    </div>
-    <div class="cg-slide-body">
-    <div class="cg-tool-grid-10">
-      <div class="cg-tool accent"><div class="name">context</div><div class="desc">任务/区域一站式上下文（首选）。</div></div>
-      <div class="cg-tool accent"><div class="name">trace</div><div class="desc">A→B 调用链；flow 问题先打这个。</div></div>
-      <div class="cg-tool"><div class="name">explore</div><div class="desc">多符号源码一次拉回。</div></div>
-      <div class="cg-tool"><div class="name">search</div><div class="desc">按名找 symbol；比 grep 快。</div></div>
-      <div class="cg-tool"><div class="name">node</div><div class="desc">单 symbol 签名 / 源码 / docstring。</div></div>
-      <div class="cg-tool"><div class="name">callers</div><div class="desc">谁调用它。</div></div>
-      <div class="cg-tool"><div class="name">callees</div><div class="desc">它调用谁。</div></div>
-      <div class="cg-tool"><div class="name">impact</div><div class="desc">改动爆炸半径。</div></div>
-      <div class="cg-tool"><div class="name">files</div><div class="desc">目录结构与文件列表。</div></div>
-      <div class="cg-tool"><div class="name">status</div><div class="desc">索引规模 · pending sync。</div></div>
-    </div>
-    </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">推荐链：trace → explore · 或 context → explore</div>
-      <div class="kpi-thin-sm">禁止用 search+callers 手工拼路径</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S21" data-animate="tech-spec">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">09 · BENCHMARK</div><div class="r">7 REPOS · MEDIAN OF 4</div></div>
-    <div class="cg-s21-split">
-      <div data-anim="title" style="display:flex;flex-direction:column;gap:1.6vh">
-        <div class="t-meta">Claude Code headless · with vs without MCP</div>
-        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5vw,8.6vh);line-height:1.02;letter-spacing:-.025em">更少轮次<br/>更少 Read<br/>更快答完</h2>
-        <p class="t-body" style="max-width:36ch;font-size:max(16px,1vw)">7 个真实仓库、7 种语言。收益来自探索轮次坍缩——大仓上常见 <strong>0 Read</strong> 直接 trace 答完。</p>
-      </div>
-      <div data-anim="kpi" style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.2vw">
-        <div class="stat-card accent-top"><div class="stat-label">Cost</div><div class="stat-nb">35<span class="stat-unit">%</span></div><div class="stat-note">median cheaper</div></div>
-        <div class="stat-card accent-top"><div class="stat-label">Tokens</div><div class="stat-nb">57<span class="stat-unit">%</span></div><div class="stat-note">median fewer</div></div>
-        <div class="stat-card accent-top"><div class="stat-label">Time</div><div class="stat-nb">46<span class="stat-unit">%</span></div><div class="stat-note">median faster</div></div>
-        <div class="stat-card accent-top"><div class="stat-label">Tools</div><div class="stat-nb">71<span class="stat-unit">%</span></div><div class="stat-note">median fewer calls</div></div>
-      </div>
-    </div>
-    <div class="cg-slide-foot" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1vw;border-top:1px solid var(--border-subtle);padding-top:1.5vh">
-      <div class="t-meta">VS Code · TS · ~10k</div>
-      <div class="t-meta">Excalidraw · TS · ~640</div>
-      <div class="t-meta">Tokio · Rust · ~790</div>
-      <div class="t-meta">Django · Py · ~3k</div>
-      <div class="t-meta">OkHttp · Java · ~645</div>
-      <div class="t-meta">Gin · Go · ~110</div>
-      <div class="t-meta">Alamofire · Swift · ~110</div>
-      <div class="t-meta" style="text-align:right">re-validated v0.9.4</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide" data-layout="S08" data-animate="duo-mirror">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">10 · COMPLEMENT</div><div class="r">UNDERSTAND ANYTHING</div></div>
-    <div data-anim="head" class="cg-duo-head cg-slide-head">
-      <div class="t-meta">同一代码库 · 两种图谱消费方式</div>
-      <h2 class="h-xl-zh">Agent 查结构，人看全景</h2>
-    </div>
-    <div class="duo-compare cg-duo-dense">
-      <div class="col accent">
-        <div class="col-tag"><span class="num">A</span> CodeGraph</div>
-        <div class="col-ttl" style="color:var(--accent)">编码时<br/>结构查询</div>
-        <div class="cg-flow-stack">
-          <div class="cg-flow-step good"><span class="mono">AST</span> Tree-sitter 确定性提取</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">MCP</span> trace · context · impact</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">ms</span> 本地 SQLite，Agent 零 Read</div>
-        </div>
-        <div class="t-meta" style="margin-top:1.2vh;max-width:28ch">目标：让 Agent 在写代码时少猜、少读整文件。</div>
-      </div>
-      <div class="vrule"></div>
-      <div class="col">
-        <div class="col-tag"><span class="num">B</span> Understand Anything</div>
-        <div class="col-ttl">入职时<br/>全景理解</div>
-        <div class="cg-flow-stack">
-          <div class="cg-flow-step good"><span class="mono">/understand</span> 5+ Agent 并行建图</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">LLM</span> 摘要 · 分层 · domain · Tour</div>
-          <div class="cg-flow-arrow">↓</div>
-          <div class="cg-flow-step good"><span class="mono">dashboard</span> 力导向图 · 语义搜索</div>
-        </div>
-        <figure class="tile" data-anim="up" style="margin-top:.8vh">
-          <div class="frame-img h-16 r-16x10 fit-contain swiss-lined">
-            <img src="images/10-ua-hero.png" alt="Understand Anything — 交互式代码知识图谱" data-image-slot="s16-brief-16x10" loading="lazy" decoding="async">
-          </div>
-        </figure>
-      </div>
-    </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">Tree-sitter 结构边可复现 · LLM 补语义摘要</div>
-      <div class="kpi-thin-sm accent">互补，不是替代</div>
-    </div>
-  </div>
-</section>
-
-<section class="slide ua-skills" data-layout="S04" data-animate="six-cells">
-  <div class="canvas-card">
-    <div class="chrome-min tight"><div class="l">11 · UA WORKFLOW</div><div class="r">PLUGIN · DASHBOARD</div></div>
-    <div data-anim="head" class="cg-slide-head">
-      <div class="t-meta">Claude Code Plugin · Cursor / Codex / Copilot / Gemini CLI …</div>
-      <h2 class="h-xl-zh">一条命令建图，一张网页读懂</h2>
-    </div>
-    <div class="cg-slide-body">
-    <div class="cg-ua-split">
-      <div class="sub-grid-3-2">
-        <div class="sub-card accent"><i data-lucide="workflow"></i><span class="nb-corner">01</span><div class="ttl">/understand</div><div class="desc">scanner → file-analyzer → architecture-analyzer → graph-reviewer；指纹增量。</div></div>
-        <div class="sub-card"><i data-lucide="layout-dashboard"></i><span class="nb-corner">02</span><div class="ttl">/understand-dashboard</div><div class="desc">分层着色 · 模糊/语义搜索 · 节点源码 + 白话解释。</div></div>
-        <div class="sub-card"><i data-lucide="map"></i><span class="nb-corner">03</span><div class="ttl">/understand-domain</div><div class="desc">domain-analyzer：domains → flows → steps 业务横向图。</div></div>
-        <div class="sub-card"><i data-lucide="messages-square"></i><span class="nb-corner">04</span><div class="ttl">/understand-chat</div><div class="desc">基于已建图谱问答，不重新扫仓库。</div></div>
-        <div class="sub-card"><i data-lucide="git-compare"></i><span class="nb-corner">05</span><div class="ttl">/understand-diff</div><div class="desc">改动波及面 · PR review 前看 ripple。</div></div>
-        <div class="sub-card"><i data-lucide="book-open"></i><span class="nb-corner">06</span><div class="ttl">更多</div><div class="desc">onboard · explain · knowledge wiki · --language zh · --auto-update。</div></div>
-      </div>
-      <figure class="tile cg-ua-visual" data-anim="up">
-        <div class="frame-img r-16x10 fit-contain">
-          <img src="images/11-ua-dashboard.png" alt="Understand Anything — 力导向图与分层视图" data-image-slot="s16-brief-16x10" loading="lazy" decoding="async">
-        </div>
-        <figcaption class="swiss-img-caption"><strong>力导向图 · 架构分层</strong><span>/understand-dashboard</span></figcaption>
+          <span class="img-zoom-hint">点击放大</span>
+        </button>
+        <figcaption class="swiss-img-caption"><strong>A/B</strong><span>v0.9.4</span></figcaption>
       </figure>
     </div>
+    <footer class="cg-ft"><span class="t-meta">call-sequence-analysis · 大仓收益最明显</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S04" data-animate="six-cells">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">04 · PRODUCT</div><div class="r">04 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">CodeGraph 是什么</h2>
+      <p class="cg-hd__sub">确定性 AST 图，不是 LLM 总结；数据在 <span class="mono">.codegraph/</span>，查询走 MCP。</p>
+    </header>
+    <div class="cg-main cg-grid-3" data-anim="grid">
+      <div class="cg-cell accent"><span class="cg-cell__nb">01</span><div class="cg-cell__ttl">预索引</div><p class="cg-cell__desc">Tree-sitter → SQLite · 20+ 语言 · FTS 按名搜</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">02</span><div class="cg-cell__ttl">补关系</div><p class="cg-cell__desc">import · 14+ 框架路由 · React/RN 合成边</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">03</span><div class="cg-cell__ttl">Agent 查询</div><p class="cg-cell__desc">10 个 MCP 工具 · 毫秒级 · 100% 本地</p></div>
     </div>
-    <div class="cg-slide-foot">
-      <div class="t-meta">.understand-anything/knowledge-graph.json · 可 commit · git-lfs 大仓</div>
-      <div class="kpi-thin-sm">understand-anything.com/demo</div>
+    <footer class="cg-ft"><span class="t-meta">Watcher sync · staleness banner · connect-time catch-up</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S11" data-animate="timeline-walk">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">05 · PIPELINE</div><div class="r">05 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">四步流水线</h2>
+      <p class="cg-hd__sub"><span class="mono">init -i</span> 建图 → Resolve 补边 → Graph 遍历 → MCP 输出。</p>
+    </header>
+    <div class="cg-main cg-grid-4x1" data-anim="grid">
+      <div class="cg-cell"><span class="cg-cell__nb">01</span><div class="cg-cell__ttl">Index</div><p class="cg-cell__desc">扫描 · 提取 · 写入 SQLite</p></div>
+      <div class="cg-cell accent"><span class="cg-cell__nb">02</span><div class="cg-cell__ttl">Resolve</div><p class="cg-cell__desc">import · alias · 路由 · 合成边</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">03</span><div class="cg-cell__ttl">Graph</div><p class="cg-cell__desc">callers · impact · path</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">04</span><div class="cg-cell__ttl">MCP</div><p class="cg-cell__desc"><span class="mono">serve --mcp</span> · ContextBuilder</p></div>
     </div>
+    <footer class="cg-ft"><span class="t-meta">CLI · Library · MCP 同一引擎</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S04" data-animate="six-cells">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">06 · MCP</div><div class="r">06 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">四个核心工具</h2>
+      <p class="cg-hd__sub">Flow 先 <span class="mono">trace</span> · 区域先 <span class="mono">context</span> · 勿用 grep 拼路径。</p>
+    </header>
+    <div class="cg-main cg-grid-4" data-anim="grid">
+      <div class="cg-cell accent"><span class="cg-cell__nb">context</span><div class="cg-cell__ttl">任务 → 入口</div><p class="cg-cell__desc">符号 · 调用关系 · 源码片段</p></div>
+      <div class="cg-cell accent"><span class="cg-cell__nb">trace</span><div class="cg-cell__ttl">A → B 全链</div><p class="cg-cell__desc">合成边 · 每跳 inline 源码</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">explore</span><div class="cg-cell__ttl">多符号一次拉</div><p class="cg-cell__desc">替代多次 Read</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">impact</span><div class="cg-cell__ttl">爆炸半径</div><p class="cg-cell__desc">改前看 callers / 影响面</p></div>
+    </div>
+    <footer class="cg-ft"><span class="t-meta">另有 search · node · files · status</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S04" data-animate="six-cells">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">07 · MOAT</div><div class="r">07 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">grep 跟不到的</h2>
+      <p class="cg-hd__sub">价值在把静态 AST 连成 Agent 能走的端到端调用链。</p>
+    </header>
+    <div class="cg-main cg-grid-4" data-anim="grid">
+      <div class="cg-cell"><span class="cg-cell__nb">01</span><div class="cg-cell__ttl">框架路由</div><p class="cg-cell__desc">Django · Express · Rails · Spring…</p></div>
+      <div class="cg-cell accent"><span class="cg-cell__nb">02</span><div class="cg-cell__ttl">React 流</div><p class="cg-cell__desc">callback · render · JSX 子组件</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">03</span><div class="cg-cell__ttl">RN / Expo</div><p class="cg-cell__desc">NativeModules · TurboModule 桥</p></div>
+      <div class="cg-cell"><span class="cg-cell__nb">04</span><div class="cg-cell__ttl">Swift ↔ ObjC</div><p class="cg-cell__desc">@objc 混合仓端到端 trace</p></div>
+    </div>
+    <footer class="cg-ft"><span class="t-meta">heuristic 合成边 · 半条链不如不桥</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S21" data-animate="tech-spec">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">08 · BENCHMARK</div><div class="r">08 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">7 仓库 median</h2>
+      <p class="cg-hd__sub">Claude Code headless · 有图时常 <strong>0 Read</strong> 答完 flow 问题。</p>
+    </header>
+    <div class="cg-main cg-grid-4" data-anim="kpi">
+      <div class="stat-card accent-top"><div class="stat-label">Cost</div><div class="stat-nb">−35<span class="stat-unit">%</span></div><div class="stat-note">median</div></div>
+      <div class="stat-card accent-top"><div class="stat-label">Tokens</div><div class="stat-nb">−57<span class="stat-unit">%</span></div><div class="stat-note">median</div></div>
+      <div class="stat-card accent-top"><div class="stat-label">Time</div><div class="stat-nb">−46<span class="stat-unit">%</span></div><div class="stat-note">median</div></div>
+      <div class="stat-card accent-top"><div class="stat-label">Tools</div><div class="stat-nb">−71<span class="stat-unit">%</span></div><div class="stat-note">median</div></div>
+    </div>
+    <footer class="cg-ft"><span class="t-meta">VS Code · Excalidraw · Tokio · Django · OkHttp · Gin · Alamofire</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S17" data-animate="field-notes">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">09 · START</div><div class="r">09 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">30 秒上手</h2>
+      <p class="cg-hd__sub"><span class="mono">codegraph install</span> 写入 Cursor / Claude / Codex / opencode MCP。</p>
+    </header>
+    <div class="cg-main cg-install" data-anim="up">
+      <div class="cg-install__steps">
+        <div class="cg-cell"><span class="cg-cell__nb">01</span><div class="cg-cell__ttl">安装</div><p class="cg-cell__desc">curl install.sh · bundled 亦可</p></div>
+        <div class="cg-cell accent"><span class="cg-cell__nb">02</span><div class="cg-cell__ttl">索引</div><p class="cg-cell__desc"><span class="mono">codegraph init -i</span></p></div>
+        <div class="cg-cell"><span class="cg-cell__nb">03</span><div class="cg-cell__ttl">提问</div><p class="cg-cell__desc">Agent 连 MCP · 查结构</p></div>
+      </div>
+      <div class="cg-code">curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh
+cd your-project && codegraph init -i</div>
+    </div>
+    <footer class="cg-ft"><span class="t-meta">Hermes · Gemini CLI · Kiro · 索引与查询不出本机</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S08" data-animate="duo-mirror">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">10 · UA</div><div class="r">10 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">人机双轨</h2>
+      <p class="cg-hd__sub">Agent 写代码用 CodeGraph；人入职看全景用 Understand Anything。</p>
+    </header>
+    <div class="cg-main cg-duo-flat" data-anim="grid">
+      <div class="col accent">
+        <div class="col-tag">CodeGraph</div>
+        <div class="col-ttl">编码 · MCP</div>
+        <ul>
+          <li>确定性 AST · 毫秒查询</li>
+          <li>trace / context / impact</li>
+        </ul>
+      </div>
+      <div class="vrule" aria-hidden="true"></div>
+      <div class="col">
+        <div class="col-tag">Understand Anything</div>
+        <div class="col-ttl">入职 · Dashboard</div>
+        <ul>
+          <li>多 Agent 建图 + 摘要</li>
+          <li>Tour · 业务域 · 可 commit 图谱</li>
+        </ul>
+      </div>
+    </div>
+    <footer class="cg-ft"><span class="t-meta">understand-anything.com/demo · Lum1104/Understand-Anything</span></footer>
+  </div>
+</section>
+
+<section class="slide cg-std" data-layout="S16" data-animate="six-cells">
+  <div class="canvas-card">
+    <div class="chrome-min tight"><div class="l">11 · UA</div><div class="r">11 / 12</div></div>
+    <header class="cg-hd" data-anim="head">
+      <h2 class="cg-hd__title">四条命令</h2>
+      <p class="cg-hd__sub">建图 → Dashboard 浏览 → chat / domain 深化。</p>
+    </header>
+    <div class="cg-main cg-ua-row" data-anim="grid">
+      <div class="cg-grid-4">
+        <div class="cg-cell accent"><span class="cg-cell__nb">01</span><div class="cg-cell__ttl">/understand</div><p class="cg-cell__desc">生成 knowledge-graph.json</p></div>
+        <div class="cg-cell"><span class="cg-cell__nb">02</span><div class="cg-cell__ttl">/understand-dashboard</div><p class="cg-cell__desc">分层图 · 语义搜索</p></div>
+        <div class="cg-cell"><span class="cg-cell__nb">03</span><div class="cg-cell__ttl">/understand-chat</div><p class="cg-cell__desc">基于图谱问答</p></div>
+        <div class="cg-cell"><span class="cg-cell__nb">04</span><div class="cg-cell__ttl">/understand-domain</div><p class="cg-cell__desc">业务 flows 流程图</p></div>
+      </div>
+      <figure class="tile" data-anim="up">
+        <div class="frame-img r-16x10 fit-contain">
+          <img src="images/11-ua-dashboard.png" alt="UA Dashboard" data-image-slot="s16-brief-16x10" loading="lazy" decoding="async">
+        </div>
+        <figcaption class="swiss-img-caption"><strong>Dashboard</strong><span>layers</span></figcaption>
+      </figure>
+    </div>
+    <footer class="cg-ft"><span class="t-meta">Claude Plugin · Cursor · Copilot · Codex</span></footer>
   </div>
 </section>
 
@@ -1734,23 +1817,19 @@ Claude · Cursor · Codex · opencode …</div>
         </div>
       </div>
       <div class="half" style="padding:5.6vh 3.6vw 4.4vh;justify-content:space-between">
-        <div class="chrome-min"><div class="l">TAKEAWAYS</div><div class="r">04 RULES</div></div>
+        <div class="chrome-min"><div class="l">TAKEAWAYS</div><div class="r">03 POINTS</div></div>
         <div data-anim="rules" style="display:flex;flex-direction:column;gap:0">
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.6vh 0;border-top:1px solid var(--border-subtle)">
-            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.4vw,7.8vh);line-height:.9;color:var(--text-primary)">01</div>
-            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(18px,1.8vw);line-height:1.2;letter-spacing:-.015em;color:var(--text-primary);margin-bottom:1vh">结构优先</h3><p style="font-family:var(--sans),var(--sans-zh);font-size:max(16px,.94vw);line-height:1.6;color:var(--text-secondary);font-weight:400">Agent 的第一步应该是问图，而不是读文件。</p></div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle)">
+            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--text-primary)">01</div>
+            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(17px,1.7vw);line-height:1.2;color:var(--text-primary);margin-bottom:.8vh">先建图，再问图</h3><p style="font-size:max(15px,.9vw);line-height:1.55;color:var(--text-secondary)"><span class="mono">init -i</span> 一次索引，Agent 用 MCP 查结构。</p></div>
           </div>
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.6vh 0;border-top:1px solid var(--border-subtle)">
-            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.4vw,7.8vh);line-height:.9;color:var(--text-primary)">02</div>
-            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(18px,1.8vw);line-height:1.2;letter-spacing:-.015em;color:var(--text-primary);margin-bottom:1vh">本地优先</h3><p style="font-family:var(--sans),var(--sans-zh);font-size:max(16px,.94vw);line-height:1.6;color:var(--text-secondary);font-weight:400">索引、查询、源码上下文都留在开发机。</p></div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle)">
+            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--text-primary)">02</div>
+            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(17px,1.7vw);line-height:1.2;color:var(--text-primary);margin-bottom:.8vh">Flow 用 trace</h3><p style="font-size:max(15px,.9vw);line-height:1.55;color:var(--text-secondary)">一条链路答完，不靠 grep + Read 拼路径。</p></div>
           </div>
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.2vh 0;border-top:1px solid var(--border-subtle)">
-            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.4vw,7.8vh);line-height:.9;color:var(--text-primary)">03</div>
-            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(18px,1.8vw);line-height:1.2;letter-spacing:-.015em;color:var(--text-primary);margin-bottom:1vh">价值在连接</h3><p style="font-family:var(--sans),var(--sans-zh);font-size:max(16px,.94vw);line-height:1.6;color:var(--text-secondary);font-weight:400">真正的护城河不是节点数量，而是调用链能否端到端闭合。</p></div>
-          </div>
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.2vh 0;border-top:1px solid var(--border-subtle);border-bottom:2px solid var(--accent)">
-            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.4vw,7.8vh);line-height:.9;color:var(--accent)">04</div>
-            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(18px,1.8vw);line-height:1.2;letter-spacing:-.015em;color:var(--accent);margin-bottom:1vh">人机双轨</h3><p style="font-family:var(--sans),var(--sans-zh);font-size:max(16px,.94vw);line-height:1.6;color:var(--text-secondary);font-weight:400">CodeGraph 服务 Agent 实时 MCP；Understand Anything 服务团队 Dashboard、Tour 与 onboarding。</p></div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle);border-bottom:2px solid var(--accent)">
+            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--accent)">03</div>
+            <div><h3 style="font-family:var(--sans),var(--sans-zh);font-weight:400;font-size:max(17px,1.7vw);line-height:1.2;color:var(--accent);margin-bottom:.8vh">人看 UA，Agent 用 CG</h3><p style="font-size:max(15px,.9vw);line-height:1.55;color:var(--text-secondary)">编码查结构，入职看全景——同一仓库，两条路径。</p></div>
           </div>
         </div>
         <div data-anim="foot" class="t-meta" style="color:var(--text-helper);text-align:right">→ END OF FIELD NOTE</div>
@@ -1980,7 +2059,39 @@ function toggleOverview(){
   else{ov.style.display='none';}
 }
 
+const imgLightbox=document.getElementById('img-lightbox');
+const lbImg=imgLightbox.querySelector('img');
+let imgLightboxOn=false;
+
+function openImgLightbox(src, alt){
+  lbImg.src=src;
+  lbImg.alt=alt||'';
+  imgLightbox.hidden=false;
+  imgLightbox.classList.add('open');
+  imgLightboxOn=true;
+}
+function closeImgLightbox(){
+  imgLightbox.classList.remove('open');
+  imgLightbox.hidden=true;
+  imgLightboxOn=false;
+}
+imgLightbox.addEventListener('click',e=>{
+  if(e.target===imgLightbox) closeImgLightbox();
+});
+document.querySelectorAll('[data-zoom-src]').forEach(btn=>{
+  btn.addEventListener('click',e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    const img=btn.querySelector('img');
+    openImgLightbox(btn.dataset.zoomSrc, img?.alt||'');
+  });
+});
+
 addEventListener('keydown',e=>{
+  if(imgLightboxOn){
+    if(e.key==='Escape'){e.preventDefault();closeImgLightbox();return;}
+    return;
+  }
   if(e.key==='Escape'){e.preventDefault();toggleOverview();return;}
   if(e.key && e.key.toLowerCase()==='b' && !e.metaKey && !e.ctrlKey && !e.altKey){
     e.preventDefault();
@@ -2000,6 +2111,7 @@ addEventListener('keydown',e=>{
 
 let wheelTO=null,wheelAcc=0;
 addEventListener('wheel',e=>{
+  if(imgLightboxOn) return;
   wheelAcc+=e.deltaY+e.deltaX;
   if(Math.abs(wheelAcc)>50){
     if(wheelAcc>0 && window.__pipeAdvance && window.__pipeAdvance()){
@@ -2014,6 +2126,7 @@ addEventListener('wheel',e=>{
 let tx=0,ty=0;
 addEventListener('touchstart',e=>{tx=e.touches[0].clientX;ty=e.touches[0].clientY},{passive:true});
 addEventListener('touchend',e=>{
+  if(imgLightboxOn) return;
   const dx=(e.changedTouches[0].clientX-tx);
   const dy=(e.changedTouches[0].clientY-ty);
   if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)){
@@ -2064,7 +2177,7 @@ if(motion){
       el.style.transform='';
     });
     /* 同时复位需要被 recipe 接管的元素 */
-    slide.querySelectorAll('.row-fill,.tl-node,.stack-block,.bar-tower,.sub-card,.col,.vrule,.kpi-cell')
+    slide.querySelectorAll('.row-fill,.tl-node,.stack-block,.bar-tower,.sub-card,.cg-cell,.col,.vrule,.kpi-cell')
       .forEach(el=>{el.style.cssText = el.dataset._origCss || el.style.cssText;});
   }
 
@@ -2144,7 +2257,7 @@ if(motion){
   function rGridReveal(slide, all){
     const head = slide.querySelector('[data-anim="line"]');
     if(head) fade(head, {duration:.6, y:10});
-    const cards = [...slide.querySelectorAll('.sub-card')];
+    const cards = [...slide.querySelectorAll('.sub-card,.cg-cell')];
     cards.forEach((card, i)=>{
       animate(card, {opacity:[0,1], y:[20,0], scale:[.96, 1]},
         {duration:.5, delay:.3 + i*.09, easing:EASE_ENTRY_EXP});
@@ -2697,7 +2810,7 @@ if(motion){
   function revealStatic(slide){
     resetAnims(slide);
     document.getAnimations?.().forEach(a=>a.cancel());
-    slide.querySelectorAll('[data-anim],.row-fill,.tl-node,.stack-block,.bar-tower,.sub-card,.col,.vrule,.kpi-cell,.card-fill,.card-accent,.card-ink')
+    slide.querySelectorAll('[data-anim],.row-fill,.tl-node,.stack-block,.bar-tower,.sub-card,.cg-cell,.col,.vrule,.kpi-cell,.card-fill,.card-accent,.card-ink')
       .forEach(el=>{
         el.style.opacity='1';
         el.style.transform='none';
