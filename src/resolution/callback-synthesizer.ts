@@ -25,6 +25,7 @@ import type { Edge, Node } from '../types';
 import type { QueryBuilder } from '../db/queries';
 import type { ResolutionContext } from './types';
 import { isGeneratedFile } from '../extraction/generated-detection';
+import { stripCommentsForRegex } from './strip-comments';
 
 const REGISTRAR_NAME = /^(on[A-Z]\w*|subscribe|addListener|addEventListener|register|watch|listen|addCallback)$/;
 const DISPATCHER_NAME = /(emit|trigger|notify|dispatch|fire|publish|flush)/i;
@@ -45,6 +46,19 @@ const VUE_HANDLER_RE = /(?:@|v-on:)([a-zA-Z][\w-]*)(?:\.[\w]+)*\s*=\s*"([^"]+)"/
 // Composable/hook destructure: `const { close: closeSidebar } = useSidebarControl()`.
 // Captures the destructure body + the called composable; only `use*` calls qualify.
 const VUE_DESTRUCTURE_RE = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(\w+)\s*\(/g;
+
+// Closure-collection dynamic dispatch (language-agnostic, Swift-first). A method
+// appends a closure to a collection property; another method iterates that
+// property *invoking each element* (`coll.forEach { $0() }` / `{ it() }`). The
+// element-invoke (`$0(` / `it(`) PROVES the collection holds closures, so pairing
+// a dispatcher to same-named registrars (`.append`/`.add`/`.push`/`.insert`,
+// incl. Swift `prop.write { $0.append }`) is high-precision. Cross-file/class by
+// design: Alamofire appends in `DataRequest.validate` but iterates in the base
+// `Request.didCompleteTask` — neither same-file nor same-class pairing reaches it.
+const CC_DISPATCH_RE = /(\w+)\.forEach\s*\{\s*(?:\$0|it)\s*\(/g;
+const CC_APPEND_WRITE_RE = /(\w+)\.write\s*\{\s*\$0(?:\.(\w+))?\.(?:append|add|push|insert)\s*\(/g;
+const CC_APPEND_DIRECT_RE = /(\w+)\.(?:append|add|push|insert)\s*\(/g;
+const CC_FANOUT_CAP = 8; // skip a field name with more dispatchers/registrars than this (too generic to pair confidently)
 
 function kebabToPascal(s: string): string {
   return s.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
@@ -137,6 +151,81 @@ function fieldChannelEdges(queries: QueryBuilder, ctx: ResolutionContext): Edge[
         });
         added++;
       }
+    }
+  }
+  return edges;
+}
+
+/**
+ * Closure-collection dispatch: dispatcher iterates a closure-collection property
+ * invoking each element; registrar appends a closure to the same-named property.
+ * Emits dispatcher → registrar so a flow reaches the registration site (where the
+ * appended closure's body — and its callers — live). High-precision: the
+ * dispatcher's element-invoke is the gate (a `.forEach` that does NOT invoke its
+ * element is ignored), so a repo with no closure-collection dispatch yields zero
+ * edges regardless of how many `.append`/`.push` sites it has.
+ *
+ * Pairs globally by field name (cross-file/class is required — see Alamofire's
+ * base-class `Request.didCompleteTask` iterating `validators` appended by the
+ * subclass `DataRequest.validate`), bounded by a fan-out cap so a generic field
+ * name shared across unrelated classes can't fan out into noise.
+ */
+function closureCollectionEdges(queries: QueryBuilder, ctx: ResolutionContext): Edge[] {
+  const candidates = [...queries.getNodesByKind('method'), ...queries.getNodesByKind('function')];
+  const dispatchers = new Map<string, Array<{ node: Node; line: number }>>(); // field → dispatcher methods + forEach line
+  const registrars = new Map<string, Array<{ node: Node; line: number }>>();   // field → registrar methods + append line
+
+  const addReg = (field: string | undefined, node: Node, absLine: number) => {
+    if (!field || /^\d+$/.test(field)) return; // `$0.append` mis-captures the `0`; the write-RE owns that field
+    const arr = registrars.get(field) ?? [];
+    if (!arr.some((r) => r.node.id === node.id)) arr.push({ node, line: absLine });
+    registrars.set(field, arr);
+  };
+
+  for (const m of candidates) {
+    const content = ctx.readFile(m.filePath);
+    const src = content && sliceLines(content, m.startLine, m.endLine);
+    if (!src) continue;
+    const hasForEach = src.includes('.forEach');
+    const hasAppend = src.includes('.append(') || src.includes('.add(') || src.includes('.push(') || src.includes('.insert(');
+    if (!hasForEach && !hasAppend) continue;
+    const lineAt = (idx: number) => (m.startLine ?? 1) + src.slice(0, idx).split('\n').length - 1;
+
+    if (hasForEach) {
+      CC_DISPATCH_RE.lastIndex = 0;
+      let d: RegExpExecArray | null;
+      while ((d = CC_DISPATCH_RE.exec(src))) {
+        const arr = dispatchers.get(d[1]!) ?? [];
+        if (!arr.some((n) => n.node.id === m.id)) arr.push({ node: m, line: lineAt(d.index) });
+        dispatchers.set(d[1]!, arr);
+      }
+    }
+    if (hasAppend) {
+      CC_APPEND_WRITE_RE.lastIndex = 0;
+      let w: RegExpExecArray | null;
+      while ((w = CC_APPEND_WRITE_RE.exec(src))) addReg(w[2] || w[1], m, lineAt(w.index)); // nested `$0.streams` else the `.write` receiver
+      CC_APPEND_DIRECT_RE.lastIndex = 0;
+      let a: RegExpExecArray | null;
+      while ((a = CC_APPEND_DIRECT_RE.exec(src))) addReg(a[1], m, lineAt(a.index));
+    }
+  }
+
+  const edges: Edge[] = [];
+  const seen = new Set<string>();
+  for (const [field, disps] of dispatchers) {
+    const regs = registrars.get(field);
+    if (!regs || regs.length === 0) continue;
+    if (disps.length > CC_FANOUT_CAP || regs.length > CC_FANOUT_CAP) continue; // generic field — can't pair confidently
+    for (const disp of disps) for (const reg of regs) {
+      if (disp.node.id === reg.node.id) continue;
+      const key = `${disp.node.id}>${reg.node.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({
+        source: disp.node.id, target: reg.node.id, kind: 'calls', line: disp.line,
+        provenance: 'heuristic',
+        metadata: { synthesizedBy: 'closure-collection', field, registeredAt: `${reg.node.filePath}:${reg.line}` },
+      });
     }
   }
   return edges;
@@ -967,13 +1056,132 @@ function mybatisJavaXmlEdges(queries: QueryBuilder): Edge[] {
 }
 
 /**
+ * Gin middleware chain. Gin runs its entire handler chain through one dynamic
+ * line in `(*Context).Next`:
+ *     for c.index < len(c.handlers) { c.handlers[c.index](c); c.index++ }
+ * `c.handlers` is a `HandlersChain` (`[]HandlerFunc`) assembled at registration
+ * time by `combineHandlers` from the funcs passed to `r.Use(...)` /
+ * `r.GET("/path", h...)` / `r.Handle(...)`. Because the call is a computed index
+ * into a runtime-built slice, tree-sitter resolves `c.handlers[c.index](c)` to
+ * NOTHING — so `callees(Next)` is just the `len()` helper and the flow
+ * `ServeHTTP → handleHTTPRequest → Next` dead-ends at the exact symbol the
+ * "how do requests flow through the middleware chain" question is about. The
+ * agent then re-queries Next and falls back to Read/grep (validated: the gin
+ * WITH-arm rabbit-holed on precisely this dead-end).
+ *
+ * Bridge it: find the chain DISPATCHER (a Go method whose body invokes a
+ * `handlers` slice by index) and link it → every HandlerFunc registered via a
+ * gin registration call, so `callees(Next)` and `trace(ServeHTTP, <handler>)`
+ * connect end-to-end. Named handlers only (`gin.Logger()` → `Logger`,
+ * `authMiddleware`); inline closures are anonymous and skipped. Like
+ * react-render / interface-impl this is a deliberate over-approximation —
+ * reachability-correct (any registered handler CAN run for some route), capped,
+ * and gated on the dispatcher existing so it never runs on non-gin Go repos.
+ * Provenance `heuristic`, `synthesizedBy:'gin-middleware-chain'`; `registeredAt`
+ * is the `.Use`/`.GET` site an agent would otherwise grep for.
+ */
+const GIN_DISPATCH_RE = /\.handlers\s*\[[^\]]*\]\s*\(/;                 // c.handlers[c.index](c)
+const GIN_REG_RE = /\.(?:Use|GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any|Handle)\s*\(/g;
+
+/** Balanced `(...)` body starting at the '(' index; null if unbalanced. */
+function goBalancedArgs(s: string, openIdx: number): string | null {
+  let depth = 0;
+  for (let i = openIdx; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return s.slice(openIdx + 1, i); }
+  }
+  return null;
+}
+/** Split a top-level comma list, respecting nested () [] {}. */
+function goSplitArgs(args: string): string[] {
+  const out: string[] = [];
+  let depth = 0, cur = '';
+  for (const c of args) {
+    if (c === '(' || c === '[' || c === '{') { depth++; cur += c; }
+    else if (c === ')' || c === ']' || c === '}') { depth--; cur += c; }
+    else if (c === ',' && depth === 0) { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  if (cur.trim()) out.push(cur);
+  return out;
+}
+/** Tail ident of a handler arg: `gin.Logger()`→`Logger`, `mw`→`mw`; null for string paths / closures. */
+function goHandlerIdent(expr: string): string | null {
+  const cleaned = expr.trim().replace(/\(\s*\)$/, '');                  // drop a trailing call ()
+  if (!cleaned || cleaned.startsWith('"') || cleaned.startsWith('`') || cleaned.startsWith('func')) return null;
+  const m = cleaned.match(/(?:\.|^)([A-Za-z_]\w*)$/);
+  return m ? m[1]! : null;
+}
+
+function ginMiddlewareChainEdges(queries: QueryBuilder, ctx: ResolutionContext): Edge[] {
+  // 1. Find the chain dispatcher(s): a Go method that invokes a `handlers` slice by index.
+  const dispatchers = queries.getNodesByKind('method').filter((n) => {
+    if (n.language !== 'go') return false;
+    const content = ctx.readFile(n.filePath);
+    const src = content && sliceLines(content, n.startLine, n.endLine);
+    return !!src && GIN_DISPATCH_RE.test(src);
+  });
+  if (dispatchers.length === 0) return [];                              // not a gin repo — bail
+
+  // 2. Collect handler identifiers registered via gin registration calls
+  //    (.Use / .GET / … / .Handle). String args (paths/methods) and inline
+  //    closures are dropped by goHandlerIdent; the rest are HandlerFuncs.
+  const registered = new Map<string, string>();                         // name → registeredAt (file:line)
+  for (const file of ctx.getAllFiles()) {
+    if (!file.endsWith('.go')) continue;
+    const content = ctx.readFile(file);
+    if (!content || (!content.includes('.Use(') && !/\.(?:GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|Any|Handle)\(/.test(content))) continue;
+    const safe = stripCommentsForRegex(content, 'go');
+    GIN_REG_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = GIN_REG_RE.exec(safe))) {
+      const parenIdx = m.index + m[0].length - 1;
+      const argStr = goBalancedArgs(safe, parenIdx);
+      if (!argStr) continue;
+      const line = safe.slice(0, m.index).split('\n').length;
+      for (const arg of goSplitArgs(argStr)) {
+        const name = goHandlerIdent(arg);
+        if (name && !registered.has(name)) registered.set(name, `${file}:${line}`);
+      }
+    }
+  }
+  if (registered.size === 0) return [];
+
+  // 3. Link each dispatcher → each registered handler node (dedup, capped).
+  const edges: Edge[] = [];
+  const seen = new Set<string>();
+  for (const disp of dispatchers) {
+    let added = 0;
+    for (const [name, registeredAt] of registered) {
+      if (added >= MAX_CALLBACKS_PER_CHANNEL) break;
+      const handler = ctx.getNodesByName(name).find(
+        (n) => (n.kind === 'function' || n.kind === 'method') && n.language === 'go'
+      );
+      if (!handler || handler.id === disp.id) continue;
+      const key = `${disp.id}>${handler.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({
+        source: disp.id, target: handler.id, kind: 'calls', line: disp.startLine,
+        provenance: 'heuristic',
+        metadata: { synthesizedBy: 'gin-middleware-chain', via: name, registeredAt },
+      });
+      added++;
+    }
+  }
+  return edges;
+}
+
+/**
  * Synthesize dispatcher→callback edges (field observers + EventEmitters +
  * React re-render + JSX children + Vue templates + RN event channel +
- * Fabric native-impl + MyBatis Java↔XML). Returns the count added. Never
- * throws into indexing — callers wrap in try/catch.
+ * Fabric native-impl + MyBatis Java↔XML + Gin middleware chain). Returns the
+ * count added. Never throws into indexing — callers wrap in try/catch.
  */
 export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionContext): number {
   const fieldEdges = fieldChannelEdges(queries, ctx);
+  const closureCollEdges = closureCollectionEdges(queries, ctx);
   const emitterEdges = eventEmitterEdges(ctx);
   const renderEdges = reactRenderEdges(queries, ctx);
   const jsxEdges = reactJsxChildEdges(ctx);
@@ -985,11 +1193,13 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
   const rnEventEdgesList = rnEventEdges(ctx);
   const fabricNativeEdges = fabricNativeImplEdges(ctx);
   const mybatisEdges = mybatisJavaXmlEdges(queries);
+  const ginEdges = ginMiddlewareChainEdges(queries, ctx);
 
   const merged: Edge[] = [];
   const seen = new Set<string>();
   for (const e of [
     ...fieldEdges,
+    ...closureCollEdges,
     ...emitterEdges,
     ...renderEdges,
     ...jsxEdges,
@@ -1001,6 +1211,7 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
     ...rnEventEdgesList,
     ...fabricNativeEdges,
     ...mybatisEdges,
+    ...ginEdges,
   ]) {
     const key = `${e.source}>${e.target}`;
     if (seen.has(key)) continue;
