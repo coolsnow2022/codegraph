@@ -176,6 +176,12 @@ function rowToFileRecord(row: FileRow): FileRecord {
 export class QueryBuilder {
   private db: SqliteDatabase;
 
+  // Project-name tokens (go.mod / package.json / repo dir), normalized. A query
+  // word matching one is dropped from path-relevance scoring — it names the
+  // whole project, not a symbol, so it carries no discriminative signal (#720).
+  // Set once by the CodeGraph instance; empty by default (no down-weighting).
+  private projectNameTokens: Set<string> = new Set();
+
   // Node cache for frequently accessed nodes (LRU-style, max 1000 entries)
   private nodeCache: Map<string, Node> = new Map();
   private readonly maxCacheSize = 1000;
@@ -217,6 +223,17 @@ export class QueryBuilder {
 
   constructor(db: SqliteDatabase) {
     this.db = db;
+  }
+
+  /** Set the normalized project-name tokens used to down-weight non-discriminative
+   * query words in path scoring (#720). Called once when the project opens. */
+  setProjectNameTokens(tokens: Set<string>): void {
+    this.projectNameTokens = tokens;
+  }
+
+  /** The normalized project-name tokens (#720); empty if none were derived. */
+  getProjectNameTokens(): Set<string> {
+    return this.projectNameTokens;
   }
 
   // ===========================================================================
@@ -842,7 +859,7 @@ export class QueryBuilder {
         ...r,
         score: r.score
           + kindBonus(r.node.kind)
-          + scorePathRelevance(r.node.filePath, scoringQuery)
+          + scorePathRelevance(r.node.filePath, scoringQuery, this.projectNameTokens)
           + nameMatchBonus(r.node.name, scoringQuery),
       }));
       results.sort((a, b) => b.score - a.score);
@@ -1400,6 +1417,32 @@ export class QueryBuilder {
         AND tgt.file_path != ?`;
     const rows = this.db.prepare(sql).all(filePath, filePath) as Array<{ fp: string }>;
     return rows.map((r) => r.fp);
+  }
+
+  /**
+   * Cross-file edges whose TARGET is a node in `filePath` and whose SOURCE is a
+   * node in a *different* file, paired with the target node's (name, kind) so a
+   * caller can re-resolve the edge to the re-indexed target's new ID (node IDs
+   * are `sha256(filePath:kind:name:line)`, so any line shift in the callee file
+   * changes target IDs and a naive re-insert by old ID silently drops them).
+   * Used by `storeExtractionResult` to preserve incoming edges across a file
+   * re-index (issue #899). Same edge-kind rules as
+   * {@link getDependentFilePaths}: all kinds except `contains`.
+   */
+  getCrossFileIncomingEdgesWithTarget(filePath: string): Array<Edge & { targetName: string; targetKind: NodeKind }> {
+    const sql = `SELECT e.*, tgt.name AS target_name, tgt.kind AS target_kind
+      FROM edges e
+      JOIN nodes tgt ON tgt.id = e.target
+      JOIN nodes src ON src.id = e.source
+      WHERE tgt.file_path = ?
+        AND e.kind != 'contains'
+        AND src.file_path != ?`;
+    const rows = this.db.prepare(sql).all(filePath, filePath) as Array<EdgeRow & { target_name: string; target_kind: NodeKind }>;
+    return rows.map(row => ({
+      ...rowToEdge(row),
+      targetName: row.target_name,
+      targetKind: row.target_kind,
+    }));
   }
 
   // ===========================================================================
