@@ -8,26 +8,13 @@
  * showing nothing. Deterministic, query-time only, no graph mutation, and a
  * fully connected flow must never produce the section.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import CodeGraph from '../src/index';
 import { ToolHandler } from '../src/mcp/tools';
 import { scanDynamicDispatch } from '../src/mcp/dynamic-boundaries';
-
-// These suites assert on the RAW codegraph_explore output (the Flow / boundary
-// sections). The managed reasoning-offload, when configured on the dev machine
-// (~/.codegraph/config.json `{"offload":{"managed":true}}`), REPLACES that output
-// with a remote Cerebras synthesis — so the structural assertions only hold with
-// the offload off. Disable it for this file so the suite is hermetic regardless
-// of machine config, then restore.
-let _prevOffloadDisable: string | undefined;
-beforeAll(() => { _prevOffloadDisable = process.env.CODEGRAPH_OFFLOAD_DISABLE; process.env.CODEGRAPH_OFFLOAD_DISABLE = '1'; });
-afterAll(() => {
-  if (_prevOffloadDisable === undefined) delete process.env.CODEGRAPH_OFFLOAD_DISABLE;
-  else process.env.CODEGRAPH_OFFLOAD_DISABLE = _prevOffloadDisable;
-});
 
 // ---------------------------------------------------------------------------
 // Unit: the scanner
@@ -184,7 +171,7 @@ describe('codegraph_explore — dynamic boundaries', () => {
     const res = await handler.execute('codegraph_explore', { query: 'routeSave onSave' });
     const text = res.content[0].text as string;
 
-    expect(text).toContain('## Dynamic boundaries');
+    expect(text).toContain('**Dynamic boundaries');
     expect(text).toContain('computed member call');
     expect(text).toMatch(/router\.ts:6/); // the exact dispatch site
     expect(text).toContain('candidates for key `save`');
@@ -212,7 +199,7 @@ describe('codegraph_explore — dynamic boundaries', () => {
     const res = await handler.execute('codegraph_explore', { query: 'route onSave' });
     const text = res.content[0].text as string;
 
-    expect(text).toContain('## Dynamic boundaries');
+    expect(text).toContain('**Dynamic boundaries');
     expect(text).toContain('computed member call');
     expect(text).not.toContain('candidates for key'); // runtime key → no shortlist to claim
   });
@@ -234,7 +221,7 @@ describe('codegraph_explore — dynamic boundaries', () => {
     // `processPayment` does not exist anywhere — only `route` resolves.
     const res = await handler.execute('codegraph_explore', { query: 'route processPayment' });
     const text = res.content[0].text as string;
-    expect(text).toContain('## Dynamic boundaries');
+    expect(text).toContain('**Dynamic boundaries');
   });
 
   it('renders a direct synthesized emit→handler hop as a dynamic-dispatch link (#687 criterion 1)', async () => {
@@ -267,11 +254,11 @@ describe('codegraph_explore — dynamic boundaries', () => {
     const res = await handler.execute('codegraph_explore', { query: 'completeCheckout settleInvoice' });
     const text = res.content[0].text as string;
 
-    expect(text).toContain('## Dynamic-dispatch links among your symbols');
+    expect(text).toContain('**Dynamic-dispatch links among your symbols');
     expect(text).toMatch(/completeCheckout → settleInvoice/);
     expect(text).toContain('invoice.settled');
     // Connected via the synthesized edge — no boundary to announce.
-    expect(text).not.toContain('## Dynamic boundaries');
+    expect(text).not.toContain('**Dynamic boundaries');
   });
 
   it('never adds the section to a fully connected flow', async () => {
@@ -285,8 +272,8 @@ describe('codegraph_explore — dynamic boundaries', () => {
 
     const res = await handler.execute('codegraph_explore', { query: 'stepOne stepThree' });
     const text = res.content[0].text as string;
-    expect(text).toContain('## Flow');
-    expect(text).not.toContain('## Dynamic boundaries');
+    expect(text).toContain('**Flow');
+    expect(text).not.toContain('**Dynamic boundaries');
   });
 
   it('python getattr dispatch surfaces with a prefix-key candidate', async () => {
@@ -305,7 +292,7 @@ describe('codegraph_explore — dynamic boundaries', () => {
     const res = await handler.execute('codegraph_explore', { query: 'process handle_save' });
     const text = res.content[0].text as string;
 
-    expect(text).toContain('## Dynamic boundaries');
+    expect(text).toContain('**Dynamic boundaries');
     expect(text).toContain('getattr');
     expect(text).toContain('handle_save');
   });
@@ -373,7 +360,7 @@ describe('codegraph_explore — interface dispatch', () => {
     const res = await handler.execute('codegraph_explore', { query: 'processRunExecutionData executeNode execute' });
     const text = res.content[0].text as string;
 
-    expect(text).toContain('## Interface dispatch (a named method has many implementations)');
+    expect(text).toContain('**Interface dispatch (a named method has many implementations)');
     expect(text).toMatch(/`execute` → runtime dispatch to \*\*9\*\* types implementing `INodeType`/);
     // a couple of concrete targets, with file:line
     expect(text).toMatch(/\b\w+Node\.execute` \(/);
@@ -392,8 +379,8 @@ describe('codegraph_explore — interface dispatch', () => {
 
     const res = await handler.execute('codegraph_explore', { query: 'stepOne stepThree' });
     const text = res.content[0].text as string;
-    expect(text).toContain('## Flow');
-    expect(text).not.toContain('## Interface dispatch');
+    expect(text).toContain('**Flow');
+    expect(text).not.toContain('**Interface dispatch');
   });
 
   it('stays SILENT when the interface family is below the polymorphism threshold (3 impls)', async () => {
@@ -401,6 +388,6 @@ describe('codegraph_explore — interface dispatch', () => {
 
     const res = await handler.execute('codegraph_explore', { query: 'processRunExecutionData executeNode execute' });
     const text = res.content[0].text as string;
-    expect(text).not.toContain('## Interface dispatch');
+    expect(text).not.toContain('**Interface dispatch');
   });
 });
