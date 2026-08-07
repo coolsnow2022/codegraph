@@ -24,13 +24,18 @@ import { isGeneratedFile } from '../extraction/generated-detection';
 import { splitIdentifierSegments } from '../search/identifier-segments';
 
 /**
- * Path-only heuristic for files that should not be candidates for
- * "dominant file" detection: test/spec files and tool-generated files.
- * Generated files (`*.pb.go`, `*.pulsar.go`, mock outputs, …) often
- * have huge in-file edge counts that dwarf the real source — etcd's
- * `rpc.pb.go` has 4× the in-file edges of `server.go`.
+ * Files that should not be candidates for "dominant file" detection: test/spec
+ * files and tool-generated files. Generated files (`*.pb.go`, `*.pulsar.go`,
+ * mock outputs, …) often have huge in-file edge counts that dwarf the real
+ * source — etcd's `rpc.pb.go` has 4× the in-file edges of `server.go`.
+ *
+ * Path patterns plus, when the caller passes the indexed set, files whose
+ * HEADER declares them generated — a `payroll.go` full of generated CRUD has
+ * exactly the same edge-density problem as `rpc.pb.go` and nothing in its name
+ * to catch it (#1500).
  */
-function isLowValueFile(filePath: string): boolean {
+function isLowValueFile(filePath: string, generated?: ReadonlySet<string>): boolean {
+  if (generated?.has(filePath)) return true;
   const lp = filePath.toLowerCase();
   return (
     /(?:^|\/)(tests?|__tests?__|spec)\//.test(lp) ||
@@ -97,6 +102,8 @@ interface FileRow {
   indexed_at: number;
   node_count: number;
   errors: string | null;
+  /** Absent on pre-v9 rows read through a stale prepared statement. */
+  generated?: number | null;
 }
 
 interface UnresolvedRefRow {
@@ -182,6 +189,7 @@ function rowToFileRecord(row: FileRow): FileRecord {
     indexedAt: row.indexed_at,
     nodeCount: row.node_count,
     errors: row.errors ? safeJsonParse(row.errors, undefined) : undefined,
+    generated: row.generated === 1,
   };
 }
 
@@ -230,6 +238,7 @@ export class QueryBuilder {
     getNodesByLowerName?: SqliteStatement;
     getUnresolvedCount?: SqliteStatement;
     getUnresolvedBatch?: SqliteStatement;
+    getUnresolvedBatchAfter?: SqliteStatement;
     deleteRefsByRowIdsFull?: SqliteStatement;
     getAllFilePaths?: SqliteStatement;
     getAllNodeNames?: SqliteStatement;
@@ -288,6 +297,24 @@ export class QueryBuilder {
 
   constructor(db: SqliteDatabase) {
     this.db = db;
+  }
+
+  /**
+   * Swap the underlying connection in place. Used by pool workers'
+   * connection recycling (plan §7a.6, writes-under-readers): a long-lived
+   * read connection pins WAL checkpoint progress, and the deep WAL that
+   * accumulates behind it taxes every main-thread B-tree page operation
+   * (deletes measured 42.6s → 118.8s from 0 to 4 attached readers on
+   * identical hardware). Workers therefore close and reopen their read-only
+   * connection at the pool-idle boundary; everything above the connection —
+   * this QueryBuilder, the resolver and its warm caches — survives, and only
+   * connection-derived state (prepared statements) resets, re-preparing
+   * lazily on next use.
+   */
+  rebind(db: SqliteDatabase): void {
+    this.db = db;
+    this.stmts = {};
+    this.batchStmts.clear();
   }
 
   /** Set the normalized project-name tokens used to down-weight non-discriminative
@@ -903,7 +930,8 @@ export class QueryBuilder {
       `);
     }
     const rows = this.stmts.getDominantFile.all() as Array<{ file_path: string; edge_count: number }>;
-    const filtered = rows.filter(r => !isLowValueFile(r.file_path));
+    const generated = this.getGeneratedPathsAmong(rows.map(r => r.file_path));
+    const filtered = rows.filter(r => !isLowValueFile(r.file_path, generated));
     if (filtered.length === 0 || filtered[0]!.edge_count < 20) return null;
     return {
       filePath: filtered[0]!.file_path,
@@ -936,7 +964,8 @@ export class QueryBuilder {
       `);
     }
     const rows = this.stmts.getTopRouteFile.all() as Array<{ file_path: string; cnt: number }>;
-    const filtered = rows.filter(r => !isLowValueFile(r.file_path));
+    const generated = this.getGeneratedPathsAmong(rows.map(r => r.file_path));
+    const filtered = rows.filter(r => !isLowValueFile(r.file_path, generated));
     if (filtered.length === 0) return null;
     const totalRoutes = filtered.reduce((sum, r) => sum + r.cnt, 0);
     const top = filtered[0]!;
@@ -987,7 +1016,8 @@ export class QueryBuilder {
       url: string; handler: string; handler_file: string; handler_line: number; handler_kind: string;
     }>;
     // Drop test/generated handlers — same hygiene as elsewhere.
-    const filtered = rows.filter(r => !isLowValueFile(r.handler_file));
+    const generated = this.getGeneratedPathsAmong(rows.map(r => r.handler_file));
+    const filtered = rows.filter(r => !isLowValueFile(r.handler_file, generated));
     if (filtered.length < 3) return null;
     // Identify the file holding the most handlers (the "primary handler file").
     const fileCounts = new Map<string, number>();
@@ -1846,8 +1876,8 @@ export class QueryBuilder {
   upsertFile(file: FileRecord): void {
     if (!this.stmts.upsertFile) {
       this.stmts.upsertFile = this.db.prepare(`
-        INSERT INTO files (path, content_hash, language, size, modified_at, indexed_at, node_count, errors)
-        VALUES (@path, @contentHash, @language, @size, @modifiedAt, @indexedAt, @nodeCount, @errors)
+        INSERT INTO files (path, content_hash, language, size, modified_at, indexed_at, node_count, errors, generated)
+        VALUES (@path, @contentHash, @language, @size, @modifiedAt, @indexedAt, @nodeCount, @errors, @generated)
         ON CONFLICT(path) DO UPDATE SET
           content_hash = @contentHash,
           language = @language,
@@ -1855,7 +1885,8 @@ export class QueryBuilder {
           modified_at = @modifiedAt,
           indexed_at = @indexedAt,
           node_count = @nodeCount,
-          errors = @errors
+          errors = @errors,
+          generated = @generated
       `);
     }
 
@@ -1868,7 +1899,152 @@ export class QueryBuilder {
       indexedAt: file.indexedAt,
       nodeCount: file.nodeCount,
       errors: file.errors ? JSON.stringify(file.errors) : null,
+      // The upsert always REWRITES the flag: a file that loses its banner in an
+      // edit must lose the flag on the next sync, not keep a stale 1.
+      generated: file.generated ? 1 : 0,
     });
+  }
+
+  /**
+   * Which of `filePaths` the index flagged as tool-generated (schema v9+).
+   *
+   * Bounded-lookup by design: every consumer already holds a short candidate
+   * list (a ranked file group, an FTS result page, a LIMIT-20 aggregate), so
+   * this stays a partial-index probe over a handful of paths — no whole-repo
+   * set to materialize, and no cache to invalidate, which means a ranking call
+   * can never serve a verdict the last sync already replaced.
+   *
+   * Returns ONLY the content/index signal; callers union it with
+   * {@link isGeneratedFile} so pre-v9 databases (column present, all zeros
+   * until a re-index) keep the path-only behavior rather than regressing.
+   */
+  getGeneratedPathsAmong(filePaths: Iterable<string>): Set<string> {
+    const unique = [...new Set(filePaths)];
+    const found = new Set<string>();
+    if (unique.length === 0) return found;
+
+    for (let i = 0; i < unique.length; i += SQLITE_PARAM_CHUNK_SIZE) {
+      const chunk = unique.slice(i, i + SQLITE_PARAM_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db
+        .prepare(`SELECT path FROM files WHERE generated = 1 AND path IN (${placeholders})`)
+        .all(...chunk) as Array<{ path: string }>;
+      for (const row of rows) found.add(row.path);
+    }
+    return found;
+  }
+
+  /**
+   * A reusable `(path) => boolean` over a bounded candidate list, unioning the
+   * indexed flag with the path convention. This is the shape every ranking
+   * comparator wants: one query up front, then O(1) per comparison.
+   */
+  generatedPredicateFor(filePaths: Iterable<string>): (filePath: string) => boolean {
+    const flagged = this.getGeneratedPathsAmong(filePaths);
+    return (filePath: string) => flagged.has(filePath) || isGeneratedFile(filePath);
+  }
+
+  /**
+   * Which of `filePaths` are AMBIENT DECLARATION files — they declare nothing
+   * but types, and nothing in the index depends on them (CG-28). A hand-written
+   * ambient `.d.ts` of global shims, a vendored typings file, module
+   * augmentation: reachable only by name, structurally attached to nothing.
+   *
+   * Structural, not extension-based, so a hand-written `types.ts` and a `.d.ts`
+   * are judged by the same rule and a `.d.ts` that does declare a class or a
+   * const is (correctly) not caught. Four conditions, all required:
+   *
+   *   1. it declares at least one symbol — an empty or unparsed file is not a
+   *      declaration file, it is a file we know nothing about;
+   *   2. EVERY declared symbol is a type-level kind (interface / type alias /
+   *      enum / namespace). The narrowness is deliberate and measured: a rule
+   *      of "no callables" alone flags 1–18% of a repo, including Kotlin sealed
+   *      classes, Rust `mod.rs` re-exports and django's locale constant tables —
+   *      real source that must not be demoted. This rule flags 0–4%;
+   *   3. no symbol in it originates a `calls`/`instantiates` edge — the direct
+   *      evidence that nothing here has a body;
+   *   4. NOTHING ELSE IN THE INDEX points at it. This is the condition that
+   *      separates an ambient shim from a working type module, and it is why
+   *      the flag is narrow enough to be safe: `displacement-ts`'s pipeline
+   *      `types.ts` passes 1–3 identically but carries 13 inbound imports and
+   *      21 references, so the files that answer a query about the pipeline are
+   *      typed BY it — it is part of that answer's structure. An ambient
+   *      `declare global` shim has zero. Deliberately index-wide rather than
+   *      restricted to the candidate list: the file that imports it is usually
+   *      not itself a candidate.
+   *
+   * Bounded-lookup like {@link getGeneratedPathsAmong}: callers hold a ranked
+   * candidate list, so this is a partial-index probe over a handful of paths.
+   */
+  getAmbientDeclarationPathsAmong(filePaths: Iterable<string>): Set<string> {
+    const unique = [...new Set(filePaths)];
+    const found = new Set<string>();
+    if (unique.length === 0) return found;
+
+    for (let i = 0; i < unique.length; i += SQLITE_PARAM_CHUNK_SIZE) {
+      const chunk = unique.slice(i, i + SQLITE_PARAM_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      // `file`/`import`/`export`/`parameter` are structural bookkeeping, not
+      // things the file declares, so they neither qualify nor disqualify.
+      const rows = this.db
+        .prepare(`
+          SELECT file_path,
+                 SUM(CASE WHEN kind NOT IN ('file','import','export','parameter')
+                          THEN 1 ELSE 0 END) AS declared,
+                 SUM(CASE WHEN kind IN ('interface','type_alias','enum','enum_member','namespace')
+                          THEN 1 ELSE 0 END) AS typeDeclared
+          FROM nodes
+          WHERE file_path IN (${placeholders})
+          GROUP BY file_path
+        `)
+        .all(...chunk) as Array<{ file_path: string; declared: number; typeDeclared: number }>;
+      let candidates = rows
+        .filter((r) => r.declared > 0 && r.declared === r.typeDeclared)
+        .map((r) => r.file_path);
+      if (candidates.length === 0) continue;
+
+      const disqualify = (sql: string): void => {
+        if (candidates.length === 0) return;
+        const hit = new Set(
+          (this.db
+            .prepare(sql.replace('$IN$', candidates.map(() => '?').join(',')))
+            .all(...candidates) as Array<{ file_path: string }>).map((r) => r.file_path),
+        );
+        candidates = candidates.filter((p) => !hit.has(p));
+      };
+      // (3) originates behaviour
+      disqualify(`
+        SELECT DISTINCT n.file_path AS file_path
+        FROM edges e JOIN nodes n ON n.id = e.source
+        WHERE e.kind IN ('calls','instantiates') AND n.file_path IN ($IN$)
+      `);
+      // (4) something outside the file depends on it
+      disqualify(`
+        SELECT DISTINCT t.file_path AS file_path
+        FROM edges e JOIN nodes t ON t.id = e.target JOIN nodes s ON s.id = e.source
+        WHERE t.file_path IN ($IN$) AND s.file_path <> t.file_path
+      `);
+      for (const path of candidates) found.add(path);
+    }
+    return found;
+  }
+
+  /**
+   * A reusable `(path) => boolean` ambient-declaration test over a bounded
+   * candidate list — the shape a ranking comparator wants: one query up front,
+   * O(1) per comparison.
+   */
+  ambientDeclarationPredicateFor(filePaths: Iterable<string>): (filePath: string) => boolean {
+    const flagged = this.getAmbientDeclarationPathsAmong(filePaths);
+    return (filePath: string) => flagged.has(filePath);
+  }
+
+  /** How many indexed files carry the generated flag. Surfaced by `status`. */
+  countGeneratedFiles(): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM files WHERE generated = 1')
+      .get() as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   /**
@@ -2086,6 +2262,34 @@ export class QueryBuilder {
   }
 
   /**
+   * Keyset variant of {@link getUnresolvedReferencesBatch} for the batched
+   * resolution loop: seek past the last-seen row id instead of OFFSET-walking.
+   * OFFSET reads re-scan the accumulated failed-row prefix on every batch —
+   * O(failed rows) per read, measured at 54.6s of the kernel-scale batch loop
+   * (§7a.2) — while the seek is O(batch) forever. `id` is the rowid alias, so
+   * the enumeration order is identical to the OFFSET reader's.
+   */
+  getUnresolvedReferencesBatchAfter(afterRowId: number, limit: number): UnresolvedReference[] {
+    if (!this.stmts.getUnresolvedBatchAfter) {
+      this.stmts.getUnresolvedBatchAfter = this.db.prepare(
+        "SELECT * FROM unresolved_refs WHERE status = 'pending' AND id > ? ORDER BY id LIMIT ?"
+      );
+    }
+    const rows = this.stmts.getUnresolvedBatchAfter.all(afterRowId, limit) as UnresolvedRefRow[];
+    return rows.map((row) => ({
+      fromNodeId: row.from_node_id,
+      referenceName: row.reference_name,
+      referenceKind: row.reference_kind as EdgeKind,
+      line: row.line,
+      column: row.col,
+      candidates: row.candidates ? safeJsonParse(row.candidates, undefined) : undefined,
+      filePath: row.file_path,
+      language: row.language as Language,
+      rowId: row.id,
+    }));
+  }
+
+  /**
    * Get all tracked file paths (lightweight — no full FileRecord objects)
    */
   getAllFilePaths(): string[] {
@@ -2182,17 +2386,22 @@ export class QueryBuilder {
    * Delete specific resolved references by (fromNodeId, referenceName, referenceKind) tuples.
    * More precise than deleteResolvedReferences — only removes refs that were actually resolved.
    */
-  deleteSpecificResolvedReferences(refs: Array<{ fromNodeId: string; referenceName: string; referenceKind: string }>): void {
-    if (refs.length === 0) return;
+  deleteSpecificResolvedReferences(refs: Array<{ fromNodeId: string; referenceName: string; referenceKind: string }>): number {
+    if (refs.length === 0) return 0;
     const stmt = this.db.prepare(
       'DELETE FROM unresolved_refs WHERE from_node_id = ? AND reference_name = ? AND reference_kind = ?'
     );
+    // Returns rows actually removed (SQLite `changes`, summed): the batched
+    // resolution loop's non-progress guard keys on this — zero removals from
+    // a batch that claimed work is the direct runaway signal (§7a.2).
+    let changed = 0;
     const deleteMany = this.db.transaction((items: typeof refs) => {
       for (const ref of items) {
-        stmt.run(ref.fromNodeId, ref.referenceName, ref.referenceKind);
+        changed += stmt.run(ref.fromNodeId, ref.referenceName, ref.referenceKind).changes;
       }
     });
     deleteMany(refs);
+    return changed;
   }
 
   /**
@@ -2203,13 +2412,15 @@ export class QueryBuilder {
    * caller's same-named call sites, the later sites' edges were silently never
    * created (#1269).
    */
-  deleteReferencesByRowIds(rowIds: number[]): void {
-    if (rowIds.length === 0) return;
+  deleteReferencesByRowIds(rowIds: number[]): number {
+    if (rowIds.length === 0) return 0;
     // One transaction for all chunks (each chunk was previously its own
     // implicit transaction = its own WAL commit — measurable on 100k+-ref
     // resolution persists), and the full-size chunk statement is cached so
     // repeat calls skip the re-prepare; only the final partial chunk (if any)
-    // prepares ad hoc.
+    // prepares ad hoc. Returns rows actually removed (summed `changes`) for
+    // the batched loop's non-progress guard (§7a.2).
+    let changed = 0;
     this.db.transaction(() => {
       for (let i = 0; i < rowIds.length; i += SQLITE_PARAM_CHUNK_SIZE) {
         const chunk = rowIds.slice(i, i + SQLITE_PARAM_CHUNK_SIZE);
@@ -2220,13 +2431,14 @@ export class QueryBuilder {
               `DELETE FROM unresolved_refs WHERE id IN (${placeholders})`
             );
           }
-          this.stmts.deleteRefsByRowIdsFull.run(...chunk);
+          changed += this.stmts.deleteRefsByRowIdsFull.run(...chunk).changes;
         } else {
           const placeholders = chunk.map(() => '?').join(',');
-          this.db.prepare(`DELETE FROM unresolved_refs WHERE id IN (${placeholders})`).run(...chunk);
+          changed += this.db.prepare(`DELETE FROM unresolved_refs WHERE id IN (${placeholders})`).run(...chunk).changes;
         }
       }
     })();
+    return changed;
   }
 
   /**
@@ -2238,17 +2450,19 @@ export class QueryBuilder {
    * is (re)written here so rows inserted before the v8 migration get their
    * tail the first time they're attempted.
    */
-  markReferencesFailed(refs: Array<{ fromNodeId: string; referenceName: string; referenceKind: string }>): void {
-    if (refs.length === 0) return;
+  markReferencesFailed(refs: Array<{ fromNodeId: string; referenceName: string; referenceKind: string }>): number {
+    if (refs.length === 0) return 0;
     const stmt = this.db.prepare(
       "UPDATE unresolved_refs SET status = 'failed', name_tail = ? WHERE from_node_id = ? AND reference_name = ? AND reference_kind = ?"
     );
+    let changed = 0;
     const markMany = this.db.transaction((items: typeof refs) => {
       for (const ref of items) {
-        stmt.run(referenceNameTail(ref.referenceName), ref.fromNodeId, ref.referenceName, ref.referenceKind);
+        changed += stmt.run(referenceNameTail(ref.referenceName), ref.fromNodeId, ref.referenceName, ref.referenceKind).changes;
       }
     });
     markMany(refs);
+    return changed;
   }
 
   /**
@@ -2259,17 +2473,19 @@ export class QueryBuilder {
    * can differ per call site (receiver-type inference reads the ref's line),
    * so a sibling must not inherit this row's failure.
    */
-  markReferencesFailedByRowIds(refs: Array<{ rowId: number; referenceName: string }>): void {
-    if (refs.length === 0) return;
+  markReferencesFailedByRowIds(refs: Array<{ rowId: number; referenceName: string }>): number {
+    if (refs.length === 0) return 0;
     const stmt = this.db.prepare(
       "UPDATE unresolved_refs SET status = 'failed', name_tail = ? WHERE id = ?"
     );
+    let changed = 0;
     const markMany = this.db.transaction((items: typeof refs) => {
       for (const ref of items) {
-        stmt.run(referenceNameTail(ref.referenceName), ref.rowId);
+        changed += stmt.run(referenceNameTail(ref.referenceName), ref.rowId).changes;
       }
     });
     markMany(refs);
+    return changed;
   }
 
   /**
@@ -2403,6 +2619,7 @@ export class QueryBuilder {
       edgesByKind,
       filesByLanguage,
       dbSizeBytes: 0, // Set by caller using DatabaseConnection.getSize()
+      walSizeBytes: 0, // Set by caller using DatabaseConnection.getWalSizeBytes()
       lastUpdated: Date.now(),
     };
   }

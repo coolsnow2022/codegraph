@@ -25,6 +25,7 @@ import { extractFromSource } from './tree-sitter';
 import { ParseWorkerPool, resolveParsePoolSize, resolveParseTimeoutMs } from './parse-pool';
 import { StoreWriter, StoreBundle, finalizeStoreBundle } from './store-writer';
 import { materializeKernelResult } from './kernel';
+import { detectGeneratedFile } from './generated-detection';
 import { detectLanguage, isSourceFile, isLanguageSupported, isFileLevelOnlyLanguage, initGrammars, loadGrammarsForLanguages, readGrammarWasmBytes } from './grammars';
 import { loadExtensionOverrides, loadIncludeIgnoredPatterns, loadExcludePatterns, loadIncludePatterns } from '../project-config';
 import { isCodeGraphDataDir } from '../directory';
@@ -1615,8 +1616,15 @@ export class ExtractionOrchestrator {
     let pool: ParseWorkerPool | null = null;
     if (useWorker) {
       // CODEGRAPH_PARSE_WORKERS: explicit worker count; 1 = the old single-worker
-      // behaviour (the conservative rollback). Unset → clamp(cores-1, 1, 8).
-      const poolSize = resolveParsePoolSize(process.env.CODEGRAPH_PARSE_WORKERS, os.cpus().length);
+      // behaviour (the conservative rollback). Unset → clamp(cores-1, 1, 8),
+      // with cores from availableParallelism — cpuset/affinity-honest, where
+      // os.cpus() enumerates the host's CPUs and spawned 8 wasm workers (and
+      // their grammar heaps) inside a 2-CPU container for zero extra
+      // throughput (§7a.1). Floored so a 2-core box still gets 2 workers:
+      // parse is worker-side CPU, and 1 worker measured 34% slower than the
+      // old oversubscribed pool on the kernel-scale 2-cpuset envelope
+      // (493s vs 369s) — main + store-worker don't fill the second core.
+      const poolSize = resolveParsePoolSize(process.env.CODEGRAPH_PARSE_WORKERS, Math.max(3, os.availableParallelism()));
       // Read each needed grammar's WASM ONCE here and hand the bytes to every
       // worker, so spawns/respawns load grammars from memory instead of
       // re-reading them from disk (#1231: on an HDD, respawn re-reads amplify
@@ -2268,6 +2276,11 @@ export class ExtractionOrchestrator {
       return; // No changes
     }
 
+    // Re-decided on every re-index of a changed file, so a banner added (or
+    // removed) by an edit is reflected on the next sync (#1500). Computed after
+    // the unchanged-file early return so untouched files pay nothing.
+    const generated = detectGeneratedFile(filePath, content);
+
     // Snapshot incoming cross-file edges BEFORE deleting this file's nodes.
     // `deleteFile` cascades to delete every edge whose source OR target is a
     // node in this file (edges.FK ... ON DELETE CASCADE). Edges whose SOURCE is
@@ -2333,6 +2346,7 @@ export class ExtractionOrchestrator {
           indexedAt: Date.now(),
           nodeCount: result.nodes.length,
           errors: result.errors.length > 0 ? result.errors : undefined,
+          generated,
         },
       });
       if (crossFileIncomingEdges.length > 0) {
@@ -2393,6 +2407,7 @@ export class ExtractionOrchestrator {
       indexedAt: Date.now(),
       nodeCount: result.nodes.length,
       errors: result.errors.length > 0 ? result.errors : undefined,
+      generated,
     };
     this.queries.upsertFile(fileRecord);
   }
@@ -2420,6 +2435,10 @@ export class ExtractionOrchestrator {
       indexedAt: Date.now(),
       nodeCount,
       errors: resultErrors.length > 0 ? resultErrors : undefined,
+      // Decided here, once, while the content is already in memory — never at
+      // query time (#1500). The header scan short-circuits on a single
+      // substring test for ~every hand-written file.
+      generated: detectGeneratedFile(filePath, content),
     };
   }
 
@@ -2480,7 +2499,19 @@ export class ExtractionOrchestrator {
    * changes. This works in non-git projects and catches committed changes from
    * `git pull`/`checkout`/`merge`/`rebase` that `git status` cannot see.
    */
-  async sync(onProgress?: (progress: IndexProgress) => void): Promise<SyncResult> {
+  async sync(
+    onProgress?: (progress: IndexProgress) => void,
+    /**
+     * Watcher fast path: the exact project-relative paths the OS reported as
+     * changed. When provided, reconciliation runs over ONLY these paths —
+     * per-path logic identical to the full walk (stat pre-filter, hash
+     * confirm, the #1240 removal/resurrection flow) — skipping the O(repo)
+     * scan and tracked-load. Callers must pass undefined whenever the change
+     * set is not exactly known (directory removals, event overflow): the full
+     * scan-diff remains the ground truth those cases need (#1285).
+     */
+    scopedPaths?: string[]
+  ): Promise<SyncResult> {
     await initGrammars(); // Initialize WASM runtime (grammars loaded lazily below)
     const startTime = Date.now();
     let filesChecked = 0;
@@ -2507,14 +2538,33 @@ export class ExtractionOrchestrator {
     // changes from `git pull`/`checkout`/`merge`/`rebase` — which `git status`
     // cannot see, because the working tree is clean afterward.
     const tSyncScan = Date.now();
-    const currentFiles = await scanDirectoryAsync(this.rootDir);
-    if (process.env.CODEGRAPH_SYNTH_TIMINGS) console.error(`[phase-timing] sync-scan: ${Date.now() - tSyncScan}ms (${currentFiles.length} files)`);
-    filesChecked = currentFiles.length;
-    const currentSet = new Set(currentFiles);
+    let currentFiles: string[];
+    let trackedFiles: FileRecord[];
+    if (scopedPaths && scopedPaths.length > 0) {
+      // Scoped reconcile: stat only the reported paths. filesChecked counts
+      // the PATHS examined (not the files found) — it must stay non-zero even
+      // when every scoped path was a deletion, because CodeGraph.watch()
+      // reads `filesChecked === 0 && durationMs === 0` as the
+      // lock-unavailable signature (#449).
+      const unique = [...new Set(scopedPaths)];
+      currentFiles = unique.filter((p) => fs.existsSync(path.join(this.rootDir, p)));
+      trackedFiles = [];
+      for (const p of unique) {
+        const rec = this.queries.getFileByPath(p);
+        if (rec) trackedFiles.push(rec);
+      }
+      filesChecked = unique.length;
+      if (process.env.CODEGRAPH_SYNTH_TIMINGS) console.error(`[phase-timing] sync-scoped: ${Date.now() - tSyncScan}ms (${unique.length} paths, ${trackedFiles.length} tracked)`);
+    } else {
+      currentFiles = await scanDirectoryAsync(this.rootDir);
+      if (process.env.CODEGRAPH_SYNTH_TIMINGS) console.error(`[phase-timing] sync-scan: ${Date.now() - tSyncScan}ms (${currentFiles.length} files)`);
+      filesChecked = currentFiles.length;
 
-    const tTracked = Date.now();
-    const trackedFiles = this.queries.getAllFiles();
-    if (process.env.CODEGRAPH_SYNTH_TIMINGS) console.error(`[phase-timing] sync-tracked-load: ${Date.now() - tTracked}ms (${trackedFiles.length} tracked)`);
+      const tTracked = Date.now();
+      trackedFiles = this.queries.getAllFiles();
+      if (process.env.CODEGRAPH_SYNTH_TIMINGS) console.error(`[phase-timing] sync-tracked-load: ${Date.now() - tTracked}ms (${trackedFiles.length} tracked)`);
+    }
+    const currentSet = new Set(currentFiles);
     const trackedMap = new Map<string, FileRecord>();
     for (const f of trackedFiles) {
       trackedMap.set(f.path, f);
