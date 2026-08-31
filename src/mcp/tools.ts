@@ -32,6 +32,7 @@ import {
 import type { PendingFile } from '../sync';
 import type { Node, Edge, SearchResult, Subgraph, NodeKind } from '../types';
 import { isTestFile, normalizeNameToken } from '../search/query-utils';
+import { extractQueryPaths, queryMightContainPaths } from '../search/query-paths';
 import {
   existsSync,
   readFileSync,
@@ -81,7 +82,7 @@ export class NotIndexedError extends Error {}
  * retry guidance — abandoning this path is the desired agent reaction.
  */
 export class PathRefusalError extends Error {}
-import { resolve as resolvePath } from 'path';
+import { resolve as resolvePath, relative as relativePath } from 'path';
 
 /** Maximum output length to prevent context bloat (characters) */
 const MAX_OUTPUT_LENGTH = 15000;
@@ -118,12 +119,17 @@ const RUST_PATH_PREFIXES = new Set(['crate', 'super', 'self']);
  * multi-thousand-character wall of source that bloats the agent's context.
  */
 const CONTAINER_NODE_KINDS = new Set<NodeKind>([
-  'class', 'struct', 'interface', 'trait', 'protocol', 'enum', 'namespace', 'module',
+  'class', 'struct', 'union', 'interface', 'trait', 'protocol', 'enum', 'namespace', 'module',
 ]);
 
-/** Last `::` / `.` / `/`-separated segment of a qualified symbol. */
+/**
+ * Last `::` / `.` / `/`-separated segment of a qualified symbol. An Erlang
+ * arity tail (`mod::fn/3`, `fn/3`) is stripped first — the useful last segment
+ * is the function name, never the digits (#1610).
+ */
 function lastQualifierPart(symbol: string): string {
-  const parts = symbol.split(/::|[./]/).filter((p) => p.length > 0);
+  const noArity = symbol.replace(/\/\d{1,3}$/, '') || symbol;
+  const parts = noArity.split(/::|[./]/).filter((p) => p.length > 0);
   return parts[parts.length - 1] ?? symbol;
 }
 
@@ -343,7 +349,7 @@ export function getExploreOutputBudget(fileCount: number): ExploreOutputBudget {
  */
 export const RELEVANCE_KIND_WEIGHT: Readonly<Record<string, number>> = {
   // Callables and types: the answer lives in one of these.
-  function: 1, method: 1, class: 1, struct: 1, interface: 1, trait: 1,
+  function: 1, method: 1, class: 1, struct: 1, union: 1, interface: 1, trait: 1,
   protocol: 1, component: 1, route: 1, enum: 1, type_alias: 1, constructor: 1,
   // Containers: real structure, but a whole namespace/module matching a term is
   // a coarser signal than a callable matching it.
@@ -631,6 +637,13 @@ export interface ExploreAllocationCandidate {
   worth: number;
   /** Carries a symbol on the rendered flow spine. */
   spine: boolean;
+  /**
+   * The query named this file by PATH (see query-paths.ts). Pinned files are
+   * never cliffed or trimmed, and weigh at least as much as the strongest
+   * candidate — the agent asked for the file itself, so starving it on text/
+   * graph scores (which a pure-path query doesn't produce) defeats the ask.
+   */
+  pinned?: boolean;
 }
 
 export interface ExploreAllocation {
@@ -676,7 +689,16 @@ export function allocateExploreBudget(
     return Number.isFinite(w) ? w : 0;
   };
 
-  const weights = new Map(candidates.map((c) => [c.path, weightOf(c)]));
+  // Pinned files weigh at least as much as the strongest raw candidate: their
+  // score is whatever the stripped query happened to match (for a pure-path
+  // query, nearly nothing), and a proportional split on that would fund the
+  // named file worst of all. Floor of 1 covers the all-pinned/zero-score case.
+  const rawWeights = new Map(candidates.map((c) => [c.path, weightOf(c)]));
+  const topRaw = Math.max(...rawWeights.values());
+  const weights = new Map(candidates.map((c) => [
+    c.path,
+    c.pinned ? Math.max(rawWeights.get(c.path) ?? 0, topRaw, 1) : (rawWeights.get(c.path) ?? 0),
+  ]));
   const topWeight = Math.max(...weights.values());
   if (!(topWeight > 0)) return empty;
 
@@ -686,7 +708,7 @@ export function allocateExploreBudget(
   const cliffed: string[] = [];
   let admitted: ExploreAllocationCandidate[] = [];
   for (const c of candidates) {
-    if (!c.spine && (weights.get(c.path) ?? 0) < cliffAt) cliffed.push(c.path);
+    if (!c.spine && !c.pinned && (weights.get(c.path) ?? 0) < cliffAt) cliffed.push(c.path);
     else admitted.push(c);
   }
   // Never cliff every candidate: an empty response costs a whole round-trip.
@@ -705,7 +727,7 @@ export function allocateExploreBudget(
   if (admitted.length > affordable) {
     const byWeight = [...admitted].sort((a, b) => (weights.get(b.path) ?? 0) - (weights.get(a.path) ?? 0));
     const keep = new Set(byWeight.slice(0, affordable).map((c) => c.path));
-    for (const c of admitted) if (c.spine) keep.add(c.path);
+    for (const c of admitted) if (c.spine || c.pinned) keep.add(c.path);
     for (const c of admitted) if (!keep.has(c.path)) cliffed.push(c.path);
     admitted = admitted.filter((c) => keep.has(c.path));
   }
@@ -1297,6 +1319,13 @@ export class ToolHandler {
   // The directory the server last searched for a default project. Surfaced in
   // the "not initialized" error so users can see why detection missed.
   private defaultProjectHint: string | null = null;
+  // Indexed sub-projects the engine's bounded down-scan saw below the search
+  // base when no default project resolved (#1607). Listed in the "not
+  // initialized" error so the fact is reachable through the protocol, not just
+  // the host's stderr capture. Engine-maintained (initial resolve + throttled
+  // retry) — tool calls themselves never scan.
+  private knownSubprojects: string[] = [];
+  private knownSubprojectsBase: string | null = null;
   // Per-start-path cache of the git worktree/index mismatch (issue #155). The
   // mismatch is a fixed property of (where the request came from → which
   // .codegraph/ it resolves to), so the up-to-two `git rev-parse` spawns run
@@ -1392,6 +1421,27 @@ export class ToolHandler {
    */
   setDefaultProjectHint(searchedPath: string): void {
     this.defaultProjectHint = searchedPath;
+  }
+
+  /**
+   * Engine-only: record the indexed sub-projects the workspace down-scan saw
+   * when it could not adopt a default project (#1606/#1607). An empty list
+   * clears any previous note.
+   */
+  setKnownSubprojects(roots: string[], base: string): void {
+    this.knownSubprojects = roots;
+    this.knownSubprojectsBase = base;
+  }
+
+  /** One message line naming the indexed sub-projects, or '' when none known. */
+  private formatKnownSubprojects(): string {
+    if (this.knownSubprojects.length === 0) return '';
+    const base = this.knownSubprojectsBase;
+    const rels = this.knownSubprojects.map((r) => (base ? relativePath(base, r) || '.' : r));
+    return (
+      `Indexed sub-projects were found below it: ${rels.join(', ')} — ` +
+      'pass one of them (absolute, or resolved against that directory) as projectPath.\n'
+    );
   }
 
   /**
@@ -1516,6 +1566,7 @@ export class ToolHandler {
         throw new NotIndexedError(
           'No CodeGraph project is loaded for this session.\n' +
           `Searched for a .codegraph/ directory starting from: ${searched}\n` +
+          this.formatKnownSubprojects() +
           'Either the server root has no index of its own (e.g. a monorepo where only ' +
           "sub-projects are indexed), or the MCP client launched the server outside your " +
           'project without reporting the workspace root. Either way, target the project ' +
@@ -2542,6 +2593,14 @@ export class ToolHandler {
       // fed only to the dynamic-dispatch-links scan below.
       const dynNamed = new Map<string, Node>();
       const DYN_KINDS = new Set(['constant', 'variable', 'field', 'property']);
+      // Nodes resolved from a SHAPE-PRECISE token (camelCase / PascalCase /
+      // snake_case / qualified) — the same test the gather path uses. It is the
+      // difference between "the agent named this symbol" and "an ordinary English
+      // word in a prose question collided with a callable", and it is what makes
+      // the narrative-less return below safe (see `identityOnly`).
+      const isPreciseToken = (x: string) =>
+        /[._$]|::|\//.test(x) || /[a-z][A-Z]/.test(x) || /^[A-Z]/.test(x);
+      const preciseNamedIds = new Set<string>();
       const hasHeuristicEdge = (id: string): boolean =>
         [...cg.getCallers(id), ...cg.getCallees(id)].some(({ edge }) => edge.provenance === 'heuristic');
       for (const t of tokens) {
@@ -2560,9 +2619,11 @@ export class ToolHandler {
             });
         const kept = pick.slice(0, 6);
         tokenNodes.set(t, kept.map((n) => n.id));
+        const precise = isPreciseToken(t);
         for (const n of kept) {
           named.set(n.id, n);
           if (specific) uniqueNamedNodeIds.add(n.id);
+          if (precise) preciseNamedIds.add(n.id);
         }
         // Same token, non-callable synth endpoints (capped, precision-gated on an
         // actual heuristic edge so plain config constants never qualify).
@@ -2575,6 +2636,7 @@ export class ToolHandler {
             if (CALLABLE.has(n.kind) || !DYN_KINDS.has(n.kind) || dynNamed.has(n.id)) continue;
             if (hasHeuristicEdge(n.id)) {
               dynNamed.set(n.id, n);
+              if (precise) preciseNamedIds.add(n.id);
               tokenDyn++;
             }
             if (dynNamed.size >= 12 || tokenDyn >= 4) break;
@@ -2606,6 +2668,35 @@ export class ToolHandler {
         }
         return synthLines;
       };
+      /**
+       * No narrative to print — but the agent still NAMED symbols, and their
+       * identity is a separate output from the prose (CG-38).
+       *
+       * `namedNodeIds` is not decoration: downstream it injects the named def into
+       * the file's cluster ranges and ranks it importance 9, which is the whole
+       * mechanism behind "a symbol the agent named renders" (the assembler's
+       * named-def injection). Returning EMPTY here threw that away whenever the
+       * named symbols happened not to form a call chain — two sibling closures in
+       * one factory (`queueMessage` / `flushQueuedMessages`, neither calling the
+       * other) produce no chain, no synth hop and no dispatch boundary, so BOTH
+       * defs lost importance 9 and the file rendered from its head instead: the
+       * agent got the `QueuedMessage` interface at L70 and had to Read the file
+       * for the functions at L1087/L1102 it had asked for by name.
+       *
+       * Restricted to SHAPE-PRECISE tokens. With a narrative present the prose is
+       * itself corroboration that the resolution was right, so that path keeps
+       * every named id as before; with nothing corroborating it, only an
+       * unambiguous symbol reference may promote — an English word in a prose
+       * question that happens to exact-match a callable must not earn importance 9.
+       * Same distinction, same test, as the gather path's `isPreciseToken`.
+       */
+      const identityOnly = () => (preciseNamedIds.size === 0 ? EMPTY : {
+        text: '',
+        pathNodeIds: new Set<string>(),
+        namedNodeIds: new Set<string>(preciseNamedIds),
+        uniqueNamedNodeIds: new Set<string>([...uniqueNamedNodeIds].filter((id) => preciseNamedIds.has(id))),
+        spineCallSites: new Map<string, number>(),
+      });
       if (named.size < 2) {
         // <2 CALLABLES resolved. Two recoveries before giving up: (1) synthesized
         // edges among named CONSTANT/VARIABLE endpoints — RTK thunk→thunk is
@@ -2614,7 +2705,7 @@ export class ToolHandler {
         // dynamic-dispatch site that EXPLAINS a half-connected flow.
         const synthLines = collectSynthLinks(null);
         const boundaries = named.size === 0 ? '' : (this.buildDynamicBoundaries(cg, [...named.values()], named) || '');
-        if (synthLines.length === 0 && !boundaries) return EMPTY;
+        if (synthLines.length === 0 && !boundaries) return identityOnly();
         const out: string[] = [];
         if (synthLines.length) out.push(
           '**Dynamic-dispatch links among your symbols**',
@@ -2729,7 +2820,7 @@ export class ToolHandler {
         hasMain ? (e: Edge) => pathIds.has(e.source) && pathIds.has(e.target) : null
       );
 
-      if (!hasMain && synthLines.length === 0 && !boundaryText && !polyText) return EMPTY;
+      if (!hasMain && synthLines.length === 0 && !boundaryText && !polyText) return identityOnly();
       const out: string[] = [];
       if (hasMain) {
         out.push('**Flow (call path among the symbols you queried)**', '');
@@ -2985,7 +3076,7 @@ export class ToolHandler {
     const ROOT_CAP = 5; // only the symbols the query actually targeted
     const FILE_CAP = 4; // caller files listed per symbol before "+N more"
     const MEANINGFUL = new Set<string>([
-      'function', 'method', 'class', 'interface', 'struct', 'trait', 'protocol',
+      'function', 'method', 'class', 'interface', 'struct', 'union', 'trait', 'protocol',
       'enum', 'type_alias', 'component', 'constant', 'variable', 'property', 'field',
     ]);
     const rel = (p: string) => p.replace(/\\/g, '/');
@@ -3183,6 +3274,34 @@ export class ToolHandler {
     }
     const maxFiles = clamp((args.maxFiles as number) || budget.defaultMaxFiles, 1, 20);
 
+    // File paths named in the query become PINNED files: guaranteed admission,
+    // top of the rank order, funded first — and their span is REMOVED from the
+    // matching query. Runs on the RAW query (normalizeQuerySpelling strips
+    // `/digits` tails, which would mangle numeric path segments). Without this,
+    // a SvelteKit path like `runs/[runId]/+page.svelte` was shredded by the
+    // seeding tokenizer (splits on brackets → `runId` seeded as a "named
+    // symbol") and by FTS (`page`/`runs` fragments admitted every sibling
+    // `+page.svelte`), starving the very files the agent asked for.
+    let pinnedFiles: string[] = [];
+    let unresolvedPathSpans: string[] = [];
+    let matchQuery = query;
+    if (queryMightContainPaths(rawQuery)) {
+      try {
+        const extraction = extractQueryPaths(
+          rawQuery,
+          cg.getFiles().map((f) => f.path),
+          { maxPins: maxFiles },
+        );
+        if (extraction.pinnedFiles.length > 0 || extraction.unresolvedPathSpans.length > 0) {
+          pinnedFiles = extraction.pinnedFiles;
+          unresolvedPathSpans = extraction.unresolvedPathSpans;
+          matchQuery = normalizeQuerySpelling(extraction.strippedQuery);
+        }
+      } catch { /* path pinning must never fail an explore call */ }
+    }
+    const pinnedSet = new Set(pinnedFiles);
+    const pinnedOrder = new Map(pinnedFiles.map((p, i) => [p, i]));
+
     // Per-file allocation diagnostic (CG-4). `null` unless CODEGRAPH_EXPLORE_DEBUG
     // is set — every `diag?.` below is then a no-op and the response is
     // byte-identical. It only OBSERVES: it must never feed back into rendering.
@@ -3239,16 +3358,34 @@ export class ToolHandler {
     // Use a large maxNodes budget — explore has its own 35k char output limit
     // that prevents context bloat, so more nodes just means better coverage
     // across entry points (especially for large files like Svelte components).
-    const subgraph = await cg.findRelevantContext(query, {
+    // Matching runs on the path-stripped query; `query` stays for display.
+    const subgraph = await cg.findRelevantContext(matchQuery, {
       searchLimit: 8,
       traversalDepth: 3,
       maxNodes: 200,
       minScore: 0.2,
     });
 
+    // Pinned files' symbols enter the gather unconditionally — the agent named
+    // the file itself, so its contents ARE the answer regardless of what the
+    // stripped query text matched (which, for a pure-path query, is nothing).
+    const PINNED_FILE_NODE_CAP = 300;
+    for (const fp of pinnedFiles) {
+      let fileNodes: Node[] = [];
+      try { fileNodes = cg.getNodesInFile(fp); } catch { continue; }
+      fileNodes
+        .filter((n) => n.kind !== 'file' && n.kind !== 'import' && n.kind !== 'export')
+        .sort((a, b) => a.startLine - b.startLine)
+        .slice(0, PINNED_FILE_NODE_CAP)
+        .forEach((n) => { if (!subgraph.nodes.has(n.id)) subgraph.nodes.set(n.id, n); });
+    }
+
     if (subgraph.nodes.size === 0) {
       diag?.finishEmpty('no relevant code found — empty subgraph');
-      const empty = `No relevant code found for "${query}"`;
+      const missNote = unresolvedPathSpans.length > 0
+        ? ` (no indexed file uniquely matches ${unresolvedPathSpans.map((s) => `\`${s}\``).join(', ')})`
+        : '';
+      const empty = `No relevant code found for "${query}"${missNote}`;
       // Still an explore call, so it is still recorded: an empty answer spends a
       // call against the tier budget even though it emits no source.
       return this.exploreResult(empty, {
@@ -3311,11 +3448,18 @@ export class ToolHandler {
     {
       const FILE_EXT = /\.(?:java|kt|kts|ts|tsx|js|jsx|mjs|cjs|cs|py|go|rb|php|swift|rs|cpp|cc|cxx|c|h|hpp|scala|lua|dart|vue|svelte|astro|erl|hrl)$/i;
       const CALLABLE = new Set(['method', 'function', 'component', 'constructor']);
+      // Variables/constants seed too: in Svelte/React a `$state` variable
+      // (`chatAtBottom`, `feedAtBottom`) is exactly the kind of symbol an agent
+      // names in a query, and the exact-name search channel already returns
+      // them — only this seeding tier was callable-only. The NL-stopword guard
+      // below applies unchanged, so bare English words still can't seed a
+      // same-named local. Callables keep priority via the body-size sort.
+      const SEEDABLE = new Set([...CALLABLE, 'variable', 'constant']);
       const isTestPath = (p: string) => /(^|\/)(tests?|specs?|__tests__|testdata|mocks?|fixtures?)\//i.test(p) || /\.(test|spec)\.[a-z]+$/i.test(p);
       const bodyLines = (n: Node) => Math.max(0, (n.endLine ?? n.startLine) - n.startLine);
       const callerCount = (n: Node) => { try { return cg.getCallers(n.id).length; } catch { return 0; } };
       const tokens = [...new Set(
-        query.split(/[\s,()[\]]+/)
+        matchQuery.split(/[\s,()[\]]+/)
           .map((t) => t.replace(FILE_EXT, '').trim())
           .filter((t) => t.length >= 3 && /^[A-Za-z_$][\w$]*(?:(?:::|\.)[\w$]+)*$/.test(t))
       )].slice(0, 16);
@@ -3390,24 +3534,26 @@ export class ToolHandler {
           }
         }
         let cands = raw
-          .filter((n) => CALLABLE.has(n.kind) && !isTestPath(n.filePath))
+          .filter((n) => SEEDABLE.has(n.kind) && !isTestPath(n.filePath))
           .sort((a, b) => (bodyLines(b) > 1 ? 1 : 0) - (bodyLines(a) > 1 ? 1 : 0) || bodyLines(b) - bodyLines(a));
         // Field-name seeding fallback (#1196): a camelCase token that names NO
         // definition of its own is usually an object-literal key / API field
         // (`profileInfo`) — no node exists, so it contributed zero seeds and
         // the files that DEFINE it (`getProfileInfoV2` in profileController)
-        // never surfaced. Seed its camel-infix definers instead: callables
-        // whose name contains the token at a hump boundary or as a prefix.
+        // never surfaced. Seed its camel-infix definers instead: seedable
+        // symbols (callables + variables — `atBottom` must reach the `$state`
+        // variables `feedAtBottom`/`chatAtBottom`) whose name contains the
+        // token at a hump boundary or as a prefix.
         // Exact-empty + camel-shaped only (bare words keep the NL-stopword
         // guard below), shortest-first, capped so a hot infix can't flood.
         if (cands.length === 0 && !isQual && /[a-z][A-Z]/.test(t)) {
           const lcToken = t.toLowerCase();
           cands = cg
             .getNodesByNameSubstring(t, {
-              kinds: ['function', 'method', 'component'],
+              kinds: ['function', 'method', 'component', 'variable', 'constant'],
               limit: 60,
             })
-            .filter((n) => CALLABLE.has(n.kind) && !isTestPath(n.filePath))
+            .filter((n) => SEEDABLE.has(n.kind) && !isTestPath(n.filePath))
             .filter((n) => {
               const idx = n.name.toLowerCase().indexOf(lcToken);
               if (idx < 0) return false;
@@ -3528,7 +3674,7 @@ export class ToolHandler {
     // displaces a flow-central file. Bounded: only the few named seeds, only the
     // types in their signatures.
     const CALLABLE_KINDS = new Set(['method', 'function', 'component', 'constructor']);
-    const TYPE_KINDS = new Set(['class', 'struct', 'interface', 'trait', 'protocol', 'enum', 'type_alias']);
+    const TYPE_KINDS = new Set(['class', 'struct', 'union', 'interface', 'trait', 'protocol', 'enum', 'type_alias']);
     const SIG_EDGE = new Set(['references', 'type_of', 'returns']);
     const changeSurfaceCandidates: Node[] = [];
     const seenChangeSurface = new Set<string>();
@@ -3584,8 +3730,9 @@ export class ToolHandler {
       fileGroups.set(node.filePath, group);
     }
 
-    // Extract query terms for relevance checking
-    const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
+    // Extract query terms for relevance checking (path-stripped: a pinned
+    // file's own path fragments must not count as "term hits" everywhere)
+    const queryTerms = matchQuery.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
 
     // Test/spec/icon/i18n file detector — used by the pre-floor hard filter, the
     // rank penalty, and the comparator deprioritization.
@@ -3675,9 +3822,10 @@ export class ToolHandler {
     // keep-minimum then pulled two test files back in as the "spread".
     let candidateFiles = [...fileGroups.entries()];
     {
-      const queryMentionsTests = /\b(test|tests|testing|spec|verify|verifies)\b/i.test(query);
+      const queryMentionsTests = /\b(test|tests|testing|spec|verify|verifies)\b/i.test(matchQuery);
       if (!queryMentionsTests) {
-        const nonLow = candidateFiles.filter(([p]) => !isLowValue(p));
+        // A pinned file is exempt: naming a test file by path IS asking for it.
+        const nonLow = candidateFiles.filter(([p]) => !isLowValue(p) || pinnedSet.has(p));
         if (nonLow.length >= 2) {
           candidateFiles = nonLow;
         }
@@ -3692,7 +3840,9 @@ export class ToolHandler {
       SCORE_FLOOR_ABSOLUTE,
       Math.min(SCORE_FLOOR_MAX, topScore * SCORE_FLOOR_FRACTION_OF_TOP),
     );
-    let relevantFiles = candidateFiles.filter(([, group]) => group.score >= scoreFloor);
+    let relevantFiles = candidateFiles.filter(
+      ([fp, group]) => group.score >= scoreFloor || pinnedSet.has(fp),
+    );
     if (relevantFiles.length < SCORE_FLOOR_KEEP_MIN) {
       // Backfill from what the RELATIVE floor cut, best first, at two strengths:
       //
@@ -3707,8 +3857,11 @@ export class ToolHandler {
       //    worst outcome on the board — the agent falls straight back to grep.
       const minEvidence = relevantFiles.length === 0 ? Number.EPSILON : SCORE_FLOOR_ABSOLUTE;
       relevantFiles = candidateFiles
-        .filter(([, group]) => group.score >= minEvidence)
-        .sort((a, b) => b[1].score - a[1].score || b[1].nodes.length - a[1].nodes.length)
+        .filter(([fp, group]) => group.score >= minEvidence || pinnedSet.has(fp))
+        .sort((a, b) =>
+          (pinnedSet.has(b[0]) ? 1 : 0) - (pinnedSet.has(a[0]) ? 1 : 0)
+          || b[1].score - a[1].score
+          || b[1].nodes.length - a[1].nodes.length)
         .slice(0, Math.max(SCORE_FLOOR_KEEP_MIN, relevantFiles.length));
     }
     diag?.setScoreFloor(scoreFloor, relevantFiles.length);
@@ -3812,7 +3965,8 @@ export class ToolHandler {
     // never prunes below 2.
     if (maxGraph > 0) {
       const gated = relevantFiles.filter(([fp]) =>
-        (fileGraphScore.get(fp) ?? 0) >= maxGraph * 0.06
+        pinnedSet.has(fp)
+        || (fileGraphScore.get(fp) ?? 0) >= maxGraph * 0.06
         || centralFiles.has(fp)
         || entryFiles.has(fp)
         || changeSurfaceFiles.has(fp)
@@ -3868,7 +4022,15 @@ export class ToolHandler {
       const aPath = a[0].toLowerCase();
       const bPath = b[0].toLowerCase();
 
-      // Agent-named files first (it asked for a symbol defined here by name).
+      // Pinned files first of all — the agent named the FILE by path, which is
+      // even more explicit than naming a symbol in it. Among pins, keep the
+      // order they appeared in the query.
+      const aPin = pinnedSet.has(a[0]) ? 1 : 0;
+      const bPin = pinnedSet.has(b[0]) ? 1 : 0;
+      if (aPin !== bPin) return bPin - aPin;
+      if (aPin && bPin) return (pinnedOrder.get(a[0]) ?? 0) - (pinnedOrder.get(b[0]) ?? 0);
+
+      // Agent-named files next (it asked for a symbol defined here by name).
       const aNamed = namedSeedFiles.has(a[0]) ? 1 : 0;
       const bNamed = namedSeedFiles.has(b[0]) ? 1 : 0;
       if (aNamed !== bNamed) return bNamed - aNamed;
@@ -3970,7 +4132,7 @@ export class ToolHandler {
     // Compute the flow spine once — used both to prepend the Flow section (below)
     // and to gate adaptive source sizing: files on the spine get full source,
     // off-spine peers skeletonize.
-    const flow = this.buildFlowFromNamedSymbols(cg, query);
+    const flow = this.buildFlowFromNamedSymbols(cg, matchQuery);
 
     // Snapshot every ranked candidate's scoring inputs, in final sort order, so
     // the diagnostic can show what each file's share of the envelope was BOUGHT
@@ -3991,6 +4153,7 @@ export class ToolHandler {
           graphScore: fileGraphScore.get(fp) ?? 0,
           termHits: fileTermHits.get(fp) ?? 0,
           nodes: group.nodes.length,
+          pinned: pinnedSet.has(fp),
           named: namedSeedFiles.has(fp),
           central: centralFiles.has(fp),
           entry: entryFiles.has(fp),
@@ -4011,8 +4174,11 @@ export class ToolHandler {
       sortedFiles.map(([fp, group]) => ({
         path: fp,
         score: group.score,
-        worth: rankPenalty(fp),
+        // A pinned file's bytes are worth full price by definition — the agent
+        // asked for the file itself, generated/test or not.
+        worth: pinnedSet.has(fp) ? 1 : rankPenalty(fp),
         spine: group.nodes.some((n) => flow.pathNodeIds.has(n.id)),
+        pinned: pinnedSet.has(fp),
       })),
       budget,
       maxFiles,
@@ -4063,7 +4229,7 @@ export class ToolHandler {
     const superMany = new Map<string, boolean>();
     const definesPolymorphicSupertype = (nodes: Node[]): boolean => {
       for (const n of nodes) {
-        if (n.kind !== 'class' && n.kind !== 'interface' && n.kind !== 'struct'
+        if (n.kind !== 'class' && n.kind !== 'interface' && n.kind !== 'struct' && n.kind !== 'union'
             && n.kind !== 'trait' && n.kind !== 'protocol' && n.kind !== 'type_alias') continue;
         let many = superMany.get(n.id);
         if (many === undefined) {
@@ -4814,7 +4980,7 @@ export class ToolHandler {
       // query actually asked about (#185 follow-up — Session.swift in
       // Alamofire is the canonical case: the `Session` class spans ~1,400
       // lines). We want the granular symbols inside, not the envelope.
-      const ENVELOPE_KINDS = new Set(['file', 'module', 'class', 'struct', 'interface', 'enum', 'namespace', 'protocol', 'trait', 'component']);
+      const ENVELOPE_KINDS = new Set(['file', 'module', 'class', 'struct', 'union', 'interface', 'enum', 'namespace', 'protocol', 'trait', 'component']);
       // Cluster from this file's gathered nodes PLUS any callable the agent NAMED that
       // lives here. Explore's relevance gather can miss a named method def in a huge
       // non-sibling file — Django's query.py is 3,040 lines and `_fetch_all` (L2237)
@@ -4996,6 +5162,19 @@ export class ToolHandler {
        * keeps every rule that matters: only whole symbol ranges are emitted, so a
        * body is never cut, and the members are chosen by the same importance the
        * cluster ranking uses. Returns null when nothing needed shrinking.
+       *
+       * `sizeOf` measures the RAW source span, while the render adds
+       * `contextPadding` around every block and a line-number prefix to every
+       * line — so this over-keeps (measured ~60% under on a 1,414-line file:
+       * 16.5K accounted, 26.3K rendered). That is deliberate, not an oversight:
+       * `bound()` clamps the result to the ceiling exactly, so the slack costs no
+       * bytes, and making the estimate exact instead measured WORSE — it stops at
+       * the last member that fits whole, and the released bytes carry forward to
+       * lower-ranked files (payroll-go's `runPayrollCycleAll` body lost its
+       * `s.store.Upsert` call to a rank-5 file). What the slack must NOT do is
+       * decide WHICH members survive: that is the ceiling trim's job, and CG-38 is
+       * why that trim now protects the named spans instead of cutting in source
+       * order. See `docs/benchmarks/explore-tail-render-cg38.md`.
        */
       const shrinkCluster = (c: ExploreCluster, cap: number): SectionPart[] | null => {
         if (c.members.length < 2) return null;
@@ -5088,45 +5267,81 @@ export class ToolHandler {
        * it or re-send it. Below that floor the part is simply dropped — unless
        * nothing has been emitted at all, where the floor wins over the ceiling
        * because an empty section is the one outcome worse than an oversize one.
+       *
+       * `focusLines` are the lines this trim must not lose: the spine's next-hop
+       * call site (CG-30) and every definition the agent NAMED inside the cluster
+       * (CG-38). The head fill is source-ordered, so a named def in the TAIL of a
+       * large file is otherwise always the first thing an over-ceiling render
+       * drops — the one span the agent asked for by name, cut in favour of
+       * head-of-file filler it did not ask for. The full-ceiling fill is tried
+       * FIRST and the 60% hold-back applies only when a focus line is actually
+       * left uncovered, so a cluster whose head already reaches its focus keeps
+       * the whole ceiling for source.
        */
       const windowToCeiling = (
         parts: ReadonlyArray<SectionPart>,
         ceiling: number,
-        focusLine?: number,
+        focusLines: ReadonlyArray<number> = [],
       ): SectionPart[] => {
-        const emit: ExploreLineRange[] = [];
         const inParts = (line: number) =>
           parts.some((p) => line >= p.range.start && line <= p.range.end);
-        const needFocus = typeof focusLine === 'number' && focusLine > 0 && inParts(focusLine);
-        // Hold room back for the call site so the head window can't eat all of it.
-        const headRoom = needFocus ? Math.floor(ceiling * 0.6) : ceiling;
-        let used = 0;
-        for (const p of parts) {
-          const join = emit.length > 0 ? GAP_MARKER.length : 0;
-          if (used + join + p.text.length <= headRoom) {
-            emit.push(p.range);
-            used += join + p.text.length;
-            continue;
+        const focus = [...new Set(focusLines)]
+          .filter((l) => typeof l === 'number' && l > 0 && inParts(l))
+          .sort((a, b) => a - b);
+        /** Source-ordered fill of whole parts, the overrunning one cut to a head window. */
+        const fill = (room: number): { emit: ExploreLineRange[]; used: number } => {
+          const emit: ExploreLineRange[] = [];
+          let used = 0;
+          for (const p of parts) {
+            const join = emit.length > 0 ? GAP_MARKER.length : 0;
+            if (used + join + p.text.length <= room) {
+              emit.push(p.range);
+              used += join + p.text.length;
+              continue;
+            }
+            const first = emit.length === 0;
+            const win = headWindowOf(
+              p.range, Math.max(0, room - used - join), first ? MIN_WINDOW_LINES : 0);
+            if (win && (first || win.end - win.start + 1 >= MIN_WINDOW_LINES)) {
+              emit.push(win);
+              used += join + renderSpan(win).length;
+            }
+            break;
           }
-          const first = emit.length === 0;
-          const win = headWindowOf(
-            p.range, Math.max(0, headRoom - used - join), first ? MIN_WINDOW_LINES : 0);
-          if (win && (first || win.end - win.start + 1 >= MIN_WINDOW_LINES)) {
-            emit.push(win);
-            used += join + renderSpan(win).length;
-          }
-          break;
+          return { emit, used };
+        };
+        let { emit, used } = fill(ceiling);
+        const reached = () => (emit.length ? emit[emit.length - 1]!.end : 0);
+        if (focus.some((l) => l > reached())) {
+          // Hold room back for the focus windows so the head can't eat all of it.
+          ({ emit, used } = fill(Math.floor(ceiling * 0.6)));
         }
-        const last = emit[emit.length - 1];
-        if (needFocus && (!last || focusLine! > last.end)) {
-          const host = parts.find((p) => focusLine! >= p.range.start && focusLine! <= p.range.end)!;
-          const lo = Math.max(host.range.start, focusLine! - SPINE_WINDOW, last ? last.end + 1 : 0);
-          const hi = Math.min(host.range.end, focusLine! + SPINE_WINDOW);
-          const win = centeredWindowOf(
-            focusLine!, lo, hi, Math.max(0, ceiling - used - GAP_MARKER.length));
+        // What is left is SPLIT between the uncovered focus lines rather than
+        // handed to them in order. Greedy-in-source-order reproduces the very bug
+        // this guards: on a prose query resolving four focus lines, the two
+        // earliest took the whole reserve and `flushQueuedMessages` at L1102 —
+        // named in the question — was dropped again. A skipped or undersized
+        // window returns its share to the pool for the ones after it.
+        let covered = reached();
+        let room = Math.max(0, ceiling - used);
+        const pending = focus.filter((l) => l > covered);
+        for (let i = 0; i < pending.length; i++) {
+          const line = pending[i]!;
+          if (line <= covered) continue; // an earlier window already reached it
+          const share = Math.floor(room / (pending.length - i)) - GAP_MARKER.length;
+          if (share <= 0) continue;
+          const host = parts.find((p) => line >= p.range.start && line <= p.range.end)!;
+          const lo = Math.max(host.range.start, line - SPINE_WINDOW, covered + 1);
+          const hi = Math.min(host.range.end, line + SPINE_WINDOW);
+          const win = centeredWindowOf(line, lo, hi, share);
           // Same sliver floor as the head window — a two-line peek at the call
           // site teaches the next call's dedup to shred the block around it.
-          if (win && win.end - win.start + 1 >= MIN_WINDOW_LINES) emit.push(win);
+          if (!win || win.end - win.start + 1 < MIN_WINDOW_LINES) continue;
+          emit.push(win);
+          const cost = GAP_MARKER.length + renderSpan(win).length;
+          used += cost;
+          room -= cost;
+          covered = win.end;
         }
         // Never empty: a section with no source sends the agent to Read.
         if (emit.length === 0 && parts.length > 0) {
@@ -5136,6 +5351,24 @@ export class ToolHandler {
         return emit
           .sort((a, b) => a.start - b.start)
           .map((r) => ({ range: r, text: renderSpan(r) }));
+      };
+
+      /**
+       * The lines a ceiling trim of this cluster must not lose: the spine's
+       * next-hop call site, and the definition line of every member the agent
+       * NAMED or that is a query entry point (importance >= 9). Capped, because
+       * each one costs a window and too many turn a section into confetti; the
+       * most important come first, source order within a tier so the windows read
+       * top-down.
+       */
+      const MAX_FOCUS_LINES = 6;
+      const focusLinesOf = (c: ExploreCluster): number[] => {
+        const named = c.members
+          .filter((m) => m.importance >= 9)
+          .sort((a, b) => b.importance - a.importance || a.start - b.start)
+          .slice(0, MAX_FOCUS_LINES)
+          .map((m) => m.start);
+        return c.spineCallLine ? [c.spineCallLine, ...named] : named;
       };
 
       /**
@@ -5165,7 +5398,7 @@ export class ToolHandler {
           if (!Number.isFinite(ceiling) || sectionText(r.parts).length <= ceiling) return r;
           // Windows are subsets of spans dedupeSpans already cleared, so the record
           // still only ever claims source that was actually sent.
-          const parts = windowToCeiling(r.parts, ceiling, c.spineCallLine);
+          const parts = windowToCeiling(r.parts, ceiling, focusLinesOf(c));
           return { parts, covered: r.covered, shrunk: true };
         };
         if (sectionText(base.parts).length <= cap) {
@@ -5697,9 +5930,19 @@ export class ToolHandler {
         g.nodes.filter((n) => n.kind !== 'import' && n.kind !== 'export').map((n) => n.id),
       ).size;
     }, 0);
-    const summaryLine = survivors.length > 0
+    let summaryLine = survivors.length > 0
       ? `Found ${shownSymbols} symbol${shownSymbols === 1 ? '' : 's'} across ${survivors.length} file${survivors.length === 1 ? '' : 's'}.`
       : `Found ${subgraph.nodes.size} symbol${subgraph.nodes.size === 1 ? '' : 's'} across ${fileGroups.size} file${fileGroups.size === 1 ? '' : 's'}.`;
+    // Path pinning is visible, not silent: say which query-named files were
+    // honored, and which path spans matched nothing so the agent can correct
+    // them instead of trusting a response that quietly ignored the path.
+    const pinnedShown = pinnedFiles.filter((fp) => survivors.includes(fp)).length;
+    if (pinnedShown > 0) {
+      summaryLine += ` ${pinnedShown} file${pinnedShown === 1 ? '' : 's'} pinned from the query.`;
+    }
+    if (unresolvedPathSpans.length > 0) {
+      summaryLine += ` No indexed file uniquely matches ${unresolvedPathSpans.map((s) => `\`${s}\``).join(', ')}.`;
+    }
     finalText = finalText.replace(SUMMARY_SENTINEL, summaryLine);
 
     // Emit the allocation diagnostic from the FINAL text, so per-file bytes and
@@ -6485,6 +6728,19 @@ export class ToolHandler {
    *      Python — `stage_apply::run` matches a `run` in `stage_apply.rs`)
    */
   private matchesSymbol(node: Node, symbol: string): boolean {
+    // Erlang arity spelling (`fn/3`, `mod:fn/3` → normalized `mod.fn/3`): when
+    // the node's qualifiedName carries an arity (`mod::fn/3`, #1610), the
+    // written arity must match it exactly; the remaining comparison then runs
+    // on the arity-less spelling. A node with no arity in its qualifiedName
+    // keeps the original symbol (a `/` there means a path-ish name instead).
+    const aritySpelling = /^(.+)\/(\d{1,3})$/.exec(symbol);
+    if (aritySpelling) {
+      const nodeArity = /\/(\d{1,3})$/.exec(node.qualifiedName ?? '')?.[1];
+      if (nodeArity !== undefined) {
+        if (nodeArity !== aritySpelling[2]) return false;
+        symbol = aritySpelling[1]!;
+      }
+    }
     // Simple name match
     if (node.name === symbol) return true;
     // File basename match (e.g., "product-card" matches "product-card.liquid")
